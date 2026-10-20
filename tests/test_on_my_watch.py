@@ -845,7 +845,8 @@ class History(unittest.TestCase):
             db = os.path.join(home, 'history.db')
             w.run(CONFIG, FakePup(now=total(72)), fake_gh(prs), db)
             w.run(CONFIG, FakePup(now=total(72)), fake_gh(prs), db)
-            [newest, older] = [json.loads(r) for (r,) in sqlite3.connect(db).execute('SELECT result FROM runs ORDER BY id DESC')]
+            with contextlib.closing(sqlite3.connect(db)) as rows:  # Windows can't delete an open file
+                [newest, older] = [json.loads(r) for (r,) in rows.execute('SELECT result FROM runs ORDER BY id DESC')]
         self.assertEqual([pr['number'] for pr in newest['pullRequests']], [7])
         self.assertNotIn('pullRequests', older)
         self.assertEqual(len(older['problems']), 1)  # History and an opened old run still have Watch's part

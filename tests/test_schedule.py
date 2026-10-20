@@ -25,6 +25,7 @@ class CronToIntervals(unittest.TestCase):
             schedule.cron_to_intervals('0 9 * *')
 
 
+@unittest.skipIf(os.name == 'nt', 'builds macOS and Linux paths, which only run there')
 class Plist(unittest.TestCase):
     def test_wakes_at_every_schedules_times_and_runs_what_is_due(self):
         data = plistlib.loads(schedule.plist_for(['0 9 * * 1', '30 9 * * 1', '0 9 * * 1'], '/plugin', '/home/.on-my-watch'))
@@ -41,6 +42,7 @@ class Crons(unittest.TestCase):
         self.assertEqual(schedule.crons(config), ['*/15 * * * *', '0 9 * * *'])
 
 
+@unittest.skipIf(os.name == 'nt', 'builds macOS and Linux paths, which only run there')
 class Linux(unittest.TestCase):
     def test_the_cron_line_goes_into_the_crontab_replacing_an_older_one(self):
         line = schedule.crontab_line('0 9-18 * * 1-5', '/usr/bin/python3', '/my plugin', '/home/me/.on-my-watch', '/home/me/.local/bin:/usr/bin')
