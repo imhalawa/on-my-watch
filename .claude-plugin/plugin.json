@@ -1,7 +1,7 @@
 {
   "name": "on-my-watch",
   "version": "0.1.0",
-  "description": "Observability checks and open pull requests for your services, in a Claude Code side pane",
+  "description": "A Claude Code mod: a notification pane for your Datadog queries and GitHub pull requests.",
   "author": {
     "name": "Mohamed Halawa",
     "email": "imhalawa@outlook.com"
@@ -13,7 +13,8 @@
     "pull-requests",
     "github",
     "dashboard",
-    "pane"
+    "pane",
+    "mod"
   ],
   "types": "./types/index.d.ts"
 }
