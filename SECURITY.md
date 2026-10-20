@@ -2,7 +2,7 @@
 
 Please report security problems privately, not in a public issue.
 
-Email imhalawa@outlook.com with:
+Send it through the [contact page](https://traceintime.com/contact/) with:
 
 - What the problem is and what it could expose.
 - How to reproduce it.
