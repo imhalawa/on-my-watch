@@ -1,0 +1,29 @@
+{
+  "skill_name": "configure",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Set up on-my-watch for me. I want to watch error logs for acme/checkout-api in production.",
+      "expected_output": "Notices there is no config, asks for the missing values (display name, priority, threshold) instead of guessing them, shows the entry, copies config.example.json into ~/.on-my-watch/config.json, then saves the user's config with `on_my_watch.py config replace`.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Add a query to on-my-watch: p95 latency of service:search-api in staging.",
+      "expected_output": "Uses AskUserQuestion for source (traces), priority and alert direction, asks for the threshold, offers notify false, sets compute to percentile(@duration, 95), and saves the whole config through `config replace` keeping all other fields.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Stop watching acme/docs in on-my-watch, but keep its pull requests.",
+      "expected_output": "Removes the repository's queries but keeps the repository entry, shows the change, waits for a yes and saves through `config replace`.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Make on-my-watch check every 30 minutes during work hours only.",
+      "expected_output": "Changes only the top-level schedule to a cron line such as */30 9-17 * * 1-5, confirms it with the user, and saves through `config replace`, which also updates an installed schedule.",
+      "files": []
+    }
+  ]
+}

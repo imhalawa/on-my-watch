@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imhalawa/on-my-watch/config.schema.json",
+  "title": "on-my-watch config",
+  "description": "~/.on-my-watch/config.json. The checker refuses a config that breaks this schema and says where.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "site",
+    "schedule",
+    "window",
+    "repos"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "site": {
+      "description": "Datadog site, such as datadoghq.com or datadoghq.eu.",
+      "type": "string",
+      "pattern": "^[a-z0-9.-]+$"
+    },
+    "schedule": {
+      "description": "When scheduled runs happen: five cron fields.",
+      "type": "string",
+      "pattern": "^\\S+ \\S+ \\S+ \\S+ \\S+$"
+    },
+    "pullRequestsSchedule": {
+      "description": "When scheduled runs check pull requests, if not on schedule: five cron fields.",
+      "type": "string",
+      "pattern": "^\\S+ \\S+ \\S+ \\S+ \\S+$"
+    },
+    "window": {
+      "description": "How far back each check looks: a number then m, h or d.",
+      "type": "string",
+      "pattern": "^[0-9]+[mhd]$"
+    },
+    "environments": {
+      "description": "Environments shown as one in Watch's filter: each group's name and the env names it covers, such as {\"Production\": [\"Production\", \"Canary\"]}. Queries keep their own env.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "historyDays": {
+      "description": "How many days of runs are kept; 30 when left out.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "bots": {
+      "description": "GitHub usernames that Hide bots hides in Pull requests, such as [\"dependabot\", \"renovate\"]; [\"dependabot\"] when left out.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "notify": {
+      "description": "Desktop notifications per pane; a pane left out does not notify.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "watch": {
+          "type": "boolean"
+        },
+        "pull_requests": {
+          "type": "boolean"
+        }
+      }
+    },
+    "panes": {
+      "description": "Turns a pane off with false; a pane left out is on.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "watch": {
+          "type": "boolean"
+        },
+        "pull_requests": {
+          "type": "boolean"
+        }
+      }
+    },
+    "repos": {
+      "description": "Each repository with its queries. A repository appears once.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/repo"
+      }
+    }
+  },
+  "$defs": {
+    "repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo",
+        "name",
+        "queries"
+      ],
+      "properties": {
+        "repo": {
+          "description": "The GitHub repository as owner/name, such as acme/checkout-api.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "name": {
+          "description": "The name shown on cards and pull requests, such as Checkout.",
+          "type": "string",
+          "minLength": 1
+        },
+        "watch_only": {
+          "description": "true leaves this repository out of Pull requests entirely; its queries still run in Watch.",
+          "type": "boolean"
+        },
+        "queries": {
+          "description": "Every query for the repository's services; empty to show only its pull requests. Service, env and label together appear once.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/query"
+          }
+        }
+      }
+    },
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service",
+        "label",
+        "env",
+        "priority",
+        "source",
+        "query",
+        "alert"
+      ],
+      "properties": {
+        "service": {
+          "description": "The service this query watches, as you want to see it, such as API.",
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "description": "What this query watches, such as Errors, Warnings or a name of your own; not the service name.",
+          "type": "string",
+          "minLength": 1
+        },
+        "env": {
+          "description": "The environment the entry shows under. The query itself says which data it reads.",
+          "type": "string",
+          "minLength": 1
+        },
+        "priority": {
+          "description": "How urgent: 1 (High), 2 (Medium) or 3 (Low).",
+          "type": "integer"
+        },
+        "schedule": {
+          "description": "When this query is checked, five cron fields; the general schedule when left out.",
+          "type": "string",
+          "pattern": "^\\S+ \\S+ \\S+ \\S+ \\S+$"
+        },
+        "source": {
+          "enum": [
+            "logs",
+            "traces",
+            "metrics"
+          ]
+        },
+        "query": {
+          "description": "The full Datadog query, run exactly as written.",
+          "type": "string",
+          "minLength": 1
+        },
+        "compute": {
+          "description": "Logs and traces: count when left out, or such as percentile(@duration, 95).",
+          "type": "string",
+          "minLength": 1
+        },
+        "reduce": {
+          "description": "Metrics: how points over the window become one number; avg when left out.",
+          "enum": [
+            "avg",
+            "sum",
+            "max",
+            "min",
+            "last"
+          ]
+        },
+        "alert": {
+          "description": "Every condition given must hold. At least one.",
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "above": {
+              "type": "number"
+            },
+            "below": {
+              "type": "number"
+            }
+          }
+        },
+        "notify": {
+          "description": "false keeps the entry in the pane only.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

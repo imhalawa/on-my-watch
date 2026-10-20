@@ -1,0 +1,71 @@
+{
+  "$schema": "https://raw.githubusercontent.com/imhalawa/on-my-watch/main/config.schema.json",
+  "site": "datadoghq.com",
+  "schedule": "0 9-18 * * 1-5",
+  "window": "1h",
+  "historyDays": 30,
+  "bots": ["dependabot"],
+  "notify": {
+    "watch": true,
+    "pull_requests": true
+  },
+  "panes": {
+    "watch": true,
+    "pull_requests": true
+  },
+  "repos": [
+    {
+      "repo": "acme/checkout-api",
+      "name": "Checkout",
+      "queries": [
+        {
+          "service": "API",
+          "label": "Errors",
+          "env": "Production",
+          "priority": 1,
+          "source": "logs",
+          "query": "service:checkout-api env:production status:error",
+          "alert": {
+            "above": 20
+          }
+        },
+        {
+          "service": "API",
+          "label": "Warnings",
+          "env": "Production",
+          "priority": 2,
+          "source": "logs",
+          "query": "service:checkout-api env:production status:warn",
+          "alert": {
+            "above": 50
+          }
+        },
+        {
+          "service": "API",
+          "label": "Slow requests",
+          "env": "Production",
+          "priority": 2,
+          "source": "traces",
+          "query": "service:checkout-api env:production",
+          "compute": "percentile(@duration, 95)",
+          "alert": {
+            "above": 1000000000
+          }
+        },
+        {
+          "service": "Worker",
+          "label": "Processed jobs",
+          "env": "Production",
+          "priority": 3,
+          "notify": false,
+          "source": "metrics",
+          "query": "sum:checkout.jobs.processed{env:production}.as_count()",
+          "reduce": "sum",
+          "alert": {
+            "below": 100
+          }
+        }
+      ]
+    }
+  ]
+}

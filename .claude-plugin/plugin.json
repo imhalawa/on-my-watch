@@ -1,0 +1,19 @@
+{
+  "name": "on-my-watch",
+  "version": "0.1.0",
+  "description": "Observability checks and open pull requests for your services, in a Claude Code side pane",
+  "author": {
+    "name": "Mohamed Halawa",
+    "email": "imhalawa@outlook.com"
+  },
+  "keywords": [
+    "datadog",
+    "observability",
+    "monitoring",
+    "pull-requests",
+    "github",
+    "dashboard",
+    "pane"
+  ],
+  "types": "./types/index.d.ts"
+}
