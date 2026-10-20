@@ -1,6 +1,6 @@
 ---
 name: configure
-description: Set up or change the on-my-watch config, ~/.on-my-watch/config.json. Use for first-time setup, adding, changing or removing a repository or a Datadog query, and for settings such as the Datadog site, the window, schedules, environments, notifications, panes, bots and history. Triggers - "set up on-my-watch", "watch this service", "add a query", "add a repo", "stop watching", "change the schedule", "mute".
+description: Use when the user wants to set up on-my-watch, or add, change or remove what it watches: repositories, Datadog queries, schedules, notifications and other settings in ~/.on-my-watch/config.json.
 ---
 
 # Configure on-my-watch
