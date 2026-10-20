@@ -170,3 +170,7 @@ python3 -B -m unittest discover -s tests
 claude plugin test .
 claude plugin validate .
 ```
+
+## License
+
+[MIT](LICENSE)
