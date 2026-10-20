@@ -1,5 +1,7 @@
 # on-my-watch
 
+[![Tests](https://github.com/imhalawa/on-my-watch/actions/workflows/tests.yml/badge.svg)](https://github.com/imhalawa/on-my-watch/actions/workflows/tests.yml)
+
 ![on-my-watch: observability at your fingertips](assets/banner.svg)
 
 on-my-watch is a [Claude Code mod](https://code.claude.com/docs/en/plugins/mods/overview): a notification pane for your Datadog queries and GitHub pull requests. It runs your queries, compares each value with the line you set, and tells you when one crosses it.
