@@ -417,6 +417,24 @@ test('VS Code draws every Button filled, so its controls are symbol buttons, not
   expect((await code.findAll({ key: 'inv:API|Checkout|Production|Error logs' }))[0].props.label).toBe('✻')
 })
 
+test('in the terminal a value opens its Datadog query on press, so a terminal without links never prints the URL', async ($, on) => {
+  const { seen } = await mounted($, on)
+  const terminal = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
+  expect(await terminal.find({ type: 'Link' })).toBeUndefined()
+  const value = (await terminal.findAll({ key: 'open:API|Checkout|Production|Error logs' }))[0]
+  expect([value.type, value.props.label]).toEqual(['Button', '72'])
+  await terminal.press({ key: 'open:API|Checkout|Production|Error logs' })
+  expect(seen.runs).toContainEqual(['open', 'https://app.datadoghq.com/Error logs'])
+})
+
+test('in the terminal a pull request\'s title opens it on press; its author is plain text', async ($, on) => {
+  const { seen } = await mounted($, on)
+  const terminal = await $.ui.mount({ ...PRS, surface: 'terminal' } as any)
+  expect(await terminal.find({ type: 'Link' })).toBeUndefined()
+  await terminal.press({ key: 'open:acme/checkout-api#12' })
+  expect(seen.runs).toContainEqual(['open', 'https://github.com/acme/checkout-api/pull/12'])
+})
+
 test('a chart draws its threshold as a dashed line', async ($, on) => {
   const { ui } = await mounted($, on)
   const chart = (await ui.findAll({ type: 'Svg' })).find((i: any) => i.props.alt === 'Error logs over the last 4 runs')

@@ -679,17 +679,20 @@ async function openSession($: any, text: string, surface: string) {
   return false
 }
 
-// Opens config.json with the system's opener, on the machine Claude runs on.
-async function openConfig($: any) {
-  const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'))
-  const file = `${home}/.on-my-watch/config.json`
+// Opens a file or an address with the system's opener, on the machine Claude runs on. The terminal presses these in
+// place of links: one without link support prints a link's whole URL beside its text.
+async function openWith($: any, target: string) {
   const windows = (await $.env.get('OS')) === 'Windows_NT'
-  for (const argv of windows ? [['cmd', '/c', 'start', '', file]] : [['open', file], ['xdg-open', file]]) {
+  for (const argv of windows ? [['cmd', '/c', 'start', '', target]] : [['open', target], ['xdg-open', target]]) {
     try {
       if ((await $.process.run(argv)).exitCode === 0) return
     } catch {}
   }
-  $.ui.toast(`on-my-watch: open ${file} in your editor`)
+  $.ui.toast(`on-my-watch: could not open ${target}`)
+}
+async function openConfig($: any) {
+  const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'))
+  await openWith($, `${home}/.on-my-watch/config.json`)
 }
 
 // Mutes every notification, Watch and Pull requests alike, scheduled runs included, until unmuted.
@@ -1229,7 +1232,9 @@ export const register: Register = on => {
                     const value = (
                       <Box key="value" width={narrow ? undefined : look.valueWidth} flexShrink={0} flexDirection="row" justifyContent="flex-end">
                         {moved && <Text color={TONES[moved[1]][1]}>{moved[0]}</Text>}
-                        <Link href={p.link} label={p.value} />
+                        {look.isTerminal
+                          ? <Button key={`open:${entryKey(p)}`} plain label={p.value} onPress={() => openWith($, p.link)} />
+                          : <Link href={p.link} label={p.value} />}
                       </Box>
                     )
                     const t = p.trend
@@ -1336,14 +1341,18 @@ export const register: Register = on => {
         <Box key={key} flexDirection="column">
           <Box flexDirection="row" columnGap={1} alignItems="flex-start">
             {(lead || !look.isTerminal) && <Box width={look.isTerminal ? undefined : look.iconWidth} flexShrink={0}>{lead}</Box>}
-            <Box flexGrow={1} flexShrink={1} minWidth={0}><Link href={pr.url} label={pr.title} /></Box>
+            <Box flexGrow={1} flexShrink={1} minWidth={0}>
+              {look.isTerminal
+                ? <Button key={`open:${pr.repo}#${pr.number}`} plain label={pr.title} onPress={() => openWith($, pr.url)} />
+                : <Link href={pr.url} label={pr.title} />}
+            </Box>
             {!narrow && chip}
           </Box>
           <Box flexDirection="row" columnGap={1} alignItems="center" paddingLeft={indent}>
             <Box flexDirection="row" flexWrap="wrap" columnGap={1} flexGrow={1} flexShrink={1} minWidth={0}>
               <Text dimColor>{`#${pr.number}`}</Text>
               {!grouped && <Text dimColor>{pr.repo.split('/').pop()}</Text>}
-              {who && <Link href={profile} label={who} />}
+              {who && (look.isTerminal ? <Text>{who}</Text> : <Link href={profile} label={who} />)}
               {pr.files != null && (
                 <Box flexDirection="row" columnGap={1}>
                   <Text dimColor>{plural(pr.files, 'file')}</Text>
