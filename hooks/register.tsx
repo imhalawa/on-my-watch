@@ -1535,8 +1535,8 @@ function surfaceLook(ui: any, surface: string) {
     sparkline: (values: (number | null)[], rank: number | null | undefined, threshold: number | null | undefined, alt: string, long = false) => {
       const [hex, theme] = (rank != null && rank >= 1 && rank <= 3 ? PRIORITY_TONES[rank - 1]! : ['#8A8A8A', 'inactive']) as readonly [string, string]
       return Svg
-        // No width: the drawing scales to its column, so it never spills past it however wide a cell is drawn.
-        ? <Box key="spark" width={long ? 2 * CHART_CELLS : CHART_CELLS} flexShrink={0}><Svg source={sparkSvg(values, hex, threshold, long ? 120 : 72)} alt={alt} /></Box>
+        // Its size given: a drawing with none of its own is drawn at none on the desktop.
+        ? <Box key="spark" flexShrink={0}><Svg source={sparkSvg(values, hex, threshold, long ? 120 : 72)} alt={alt} width={long ? 120 : 72} height={20} /></Box>
         : <Text key="spark" color={theme}>{spark(values).points.map(v => (v == null ? ' ' : '▁▂▃▄▅▆▇█'[Math.round(v * 7)])).join('')}</Text>
     },
     // An icon you press. A Button holds text, not an Svg: on the desktop an invisible Button lies over the Svg;

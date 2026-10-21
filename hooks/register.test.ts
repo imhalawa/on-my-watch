@@ -439,6 +439,8 @@ test('a chart draws its threshold as a dashed line', async ($, on) => {
   const { ui } = await mounted($, on)
   const chart = (await ui.findAll({ type: 'Svg' })).find((i: any) => i.props.alt === 'Error logs over the last 4 runs')
   expect(chart.props.source).toContain('stroke-dasharray')
+  // A drawing with no size of its own is drawn at none: the desktop needs both.
+  expect([chart.props.width, chart.props.height]).toEqual([72, 20])
 })
 
 test('the terminal draws the last runs as block characters, from where its history begins', async ($, on) => {
