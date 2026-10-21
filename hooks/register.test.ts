@@ -1,5 +1,13 @@
 import { expect, test } from 'claude-code/testing'
 
+// What a desktop control's icon says: its Svg's alt, under the invisible button.
+const iconOf = async (ui: any, key: string) => (await ui.findAll({ key: `icon:${key}` }))[0]?.children[0].props.alt
+
+// The clock time the row shows for an ISO stamp, in this machine's zone.
+const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+
+// Today at 09:04, so a row's since reads as a time alone.
+const SINCE = new Date(new Date().setHours(9, 4, 0, 0)).toISOString()
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString()
 // An open PR, last updated and created the given hours ago.
 const pr = (repo: string, number: number, title: string, author: string, updated: number, created: number, review: string | null) => ({
@@ -19,16 +27,19 @@ const RESULT = {
   status: 'ok',
   errors: [],
   problems: [
-    problem('API', 'Checkout', 'Production', 'Error logs', 1, 'logs', '72', 'above 20'),
-    problem('API', 'Checkout', 'Production', 'Slow requests', 3, 'traces', '3.70s', 'above 2.00s'),
+    problem('API', 'Checkout', 'Production', 'Error logs', 1, 'logs', '72', 'above 20',
+      { raw: 72, threshold: 20, trend: { values: [null, 48, 60, 72], since: SINCE, previous: 60, isNew: false } }),
+    problem('API', 'Checkout', 'Production', 'Slow requests', 3, 'traces', '3.70s', 'above 2.00s',
+      { raw: 3.7, trend: { values: [null, null, 3.7], since: '2026-10-16T13:34:00+00:00', previous: null, isNew: true } }),
     problem('Worker', 'Queue', 'Staging', 'Queue depth', 2, 'metrics', '540', 'above 500', { notify: false }),
   ],
   span: { from: '2026-10-16T12:34:00+00:00', to: '2026-10-16T13:34:00+00:00' },
   prsCheckedAt: '2026-10-16T13:40:00+00:00',
+  viewer: 'max',
   prErrors: [],
   setup: [],
   pullRequests: [
-    { ...pr('acme/checkout-api', 12, 'Retry failed orders', 'sam', 2, 2, 'APPROVED'), ci: 'failing',
+    { ...pr('acme/checkout-api', 12, 'Retry failed orders', 'sam', 2, 2, 'APPROVED'), ci: 'failing', files: 14, additions: 610, deletions: 288, threads: 2,
       reviewers: [{ login: 'lee', review: 'approved' }, { login: 'max', review: 'pending' }] },
     pr('acme/checkout-api', 15, 'Bump the HTTP client', 'app/dependabot', 50, 240, 'REVIEW_REQUIRED'),
     pr('acme/checkout-worker', 7, 'Drain the retry queue', 'lee', 120, 200, null),
@@ -49,11 +60,12 @@ const CONFIG = { ...PANE, requestId: 'on-my-watch-config', props: { ...PANE.prop
 
 // The engine beneath the mod: the checker process answering `latest` and `run`, the prompt, a desktop surface.
 function world(on: any, latest: unknown, config: unknown = {}, env: Record<string, string> = { HOME: '/home/me', PATH: '/usr/bin' }) {
-  const seen = { opened: [] as string[], runs: [] as string[][], envs: [] as any[], submitted: [] as string[], muted: false, quiet: [] as string[], saved: [] as any[],
+  const seen = { opened: [] as string[], runs: [] as string[][], envs: [] as any[], submitted: [] as string[], commands: [] as string[], refuse: [] as string[], muted: false, quiet: [] as string[], saved: [] as any[],
     schedule: { paused: null as string | null, schedule: '0 9-18 * * 1-5', next: '2026-10-19T19:00:00', own: [{ entry: 'API|Checkout|Production|Error logs', schedule: '*/15 9-18 * * 1-5' }] } }
   on('session.start', async (_: any, e: any) => ({ cwd: e.cwd }))
   on('session.attach', async (_: any, e: any) => ({ clientId: e.clientId }))
   on('session.surfaces', async () => ({ value: [] }))
+  on('session.cwd', async () => ({ value: '/work' }))
   on('command.register', async (_: any, e: any) => ({ value: { command: e.name } }))
   on('clock.every', async () => ({ value: { cancel: () => {} } }))
   on('env.get', async (_: any, e: any) => ({ value: env[e.name] }))
@@ -61,6 +73,7 @@ function world(on: any, latest: unknown, config: unknown = {}, env: Record<strin
   on('fs.read', async () => ({ value: JSON.stringify(seen.saved.at(-1) ?? config) }))
   on('process.run', async (_: any, e: any) => {
     seen.runs.push([...e.argv])
+    if (seen.refuse.includes(e.argv[0])) return { value: { exitCode: 1, stdout: '', stderr: 'refused' } }
     seen.envs.push(e.init?.env ?? e.env)
     const command = e.argv.find((a: string) => ['latest', 'history', 'show', 'run', 'notifications', 'schedule', 'validate', 'config'].includes(a))
     if (command === 'validate') return { value: { exitCode: 0, stdout: 'config.json holds to the schema', stderr: '' } }
@@ -98,6 +111,10 @@ function world(on: any, latest: unknown, config: unknown = {}, env: Record<strin
           : {}
     return { value: { exitCode: 0, stdout: JSON.stringify(answer), stderr: '' } }
   })
+  on('command.run', async (_: any, e: any) => {
+    seen.commands.push(`/${e.command} ${e.args}`)
+    return { text: '' }
+  })
   on('prompt.submit', async (_: any, e: any) => {
     seen.submitted.push(e.text)
     return { text: e.text }
@@ -115,14 +132,15 @@ async function mounted($: any, on: any, latest: unknown = RESULT, pane: any = PA
   return { seen, ui: await $.ui.mount(pane) }
 }
 
-test('the desktop app attaching opens a Watch pane, a Pull requests pane and a Config pane', async ($, on) => {
+test('the desktop app attaching opens a Watch pane, a Pull requests pane and a Config pane, Watch in front', async ($, on) => {
   const { seen } = await mounted($, on)
-  expect(seen.opened).toEqual(['on-my-watch', 'on-my-watch-prs', 'on-my-watch-config'])
+  // Watch is opened again last, with focus: the last pane opened is the one shown.
+  expect(seen.opened).toEqual(['on-my-watch', 'on-my-watch-prs', 'on-my-watch-config', 'on-my-watch'])
 })
 
 test('a pane turned off in the config does not open', async ($, on) => {
   const { seen } = await mounted($, on, RESULT, PANE, { panes: { pull_requests: false } })
-  expect(seen.opened).toEqual(['on-my-watch', 'on-my-watch-config'])
+  expect(seen.opened).toEqual(['on-my-watch', 'on-my-watch-config', 'on-my-watch'])
 })
 
 test('one card per name and environment, the most urgent first, a row per query over its line', async ($, on) => {
@@ -136,7 +154,7 @@ test('one card per name and environment, the most urgent first, a row per query 
   const cards = (await ui.findAll({ type: 'Box' })).map((b: any) => String(b.key)).filter(k => k.startsWith('card:'))
   expect(cards).toEqual(['card:API@Production', 'card:Worker@Staging'])
   expect((await ui.findAll({ key: 'card:API@Production' }))[0].props.borderStyle).toBe('round')
-  expect(await ui.find({ key: 'card:API@Production', text: /^APIProductionInvestigateCheckoutError logs72above 20OnSlow requests3\.70sabove 2\.00sOn$/ })).toBeDefined()
+  expect(await ui.find({ key: 'card:API@Production', text: new RegExp(`^APIProductionCheckoutError logssince ${clock(SINCE)}↑72\u2003\u2003Slow requestsnew3\\.70s\u2003\u2003$`) })).toBeDefined()
   // Priority is an icon on the desktop, named for screen readers.
   const alts = (await ui.findAll({ type: 'Svg' })).map((i: any) => i.props.alt)
   expect(alts.filter((a: string) => a.startsWith('priority '))).toEqual(['priority High', 'priority High', 'priority Low', 'priority Medium', 'priority Medium'])
@@ -169,33 +187,59 @@ test('a card draws a line between its rows, and each row keeps fixed columns', a
   expect(seps).toEqual(['sep:card:API@Production:Checkout', 'sep:card:API@Production:Checkout:0', 'sep:card:API@Production:Checkout:1'])
   const row = (await ui.findAll({ key: 'q:Checkout:Error logs' }))[0]
   expect(row.props.flexDirection).toBe('row')
-  expect(row.children.map((c: any) => c.props.width ?? c.props.minWidth)).toEqual([2, 0, 2, 8, 18, undefined])
+  expect(row.children.map((c: any) => c.props.width ?? c.props.minWidth)).toEqual([2, 0, 22, 2, 8, undefined, undefined])
 })
 
-test('in a narrow pane a row puts the value at the right of its label, then the alert line and bell beneath', async ($, on) => {
+test('in a narrow pane a row puts the value and its controls at the right of its label, then its last runs beneath', async ($, on) => {
   const { ui } = await mounted($, on, RESULT, { ...PANE, props: { ...PANE.props, bodyColumns: 40 } })
   const row = (await ui.findAll({ key: 'q:Checkout:Error logs' }))[0]
   expect(row.props.flexDirection).toBe('column')
   const text = (node: any): string => (typeof node === 'string' ? node : (node.children ?? []).map(text).join(''))
   const [first, second] = row.children
-  expect(text(first)).toBe('Error logs72')
-  expect(text(second)).toBe('above 20')
-  expect(await ui.find({ key: 'bell:API|Checkout|Production|Error logs', text: 'On' })).toBeDefined()
-  expect(await ui.find({ key: 'q:Checkout:Error logs', text: 'Error logs72above 20On' })).toBeDefined()
+  expect(text(first)).toBe('Error logs↑72\u2003\u2003')
+  expect(text(second)).toBe(`since ${clock(SINCE)}`)
+  expect(await iconOf(ui, 'bell:API|Checkout|Production|Error logs')).toBe('notifications on')
+  expect(await iconOf(ui, 'inv:API|Checkout|Production|Error logs')).toBe('Investigate')
 })
 
-test('a service with one query shares its row instead of a heading', async ($, on) => {
+test('every service gets its heading, even alone in its card with one query', async ($, on) => {
   const { ui } = await mounted($, on)
-  expect(await ui.find({ key: 'svc:Queue' })).toBeUndefined()
-  expect(await ui.find({ key: 'q:Queue:Queue depth', text: /^Queue · Queue depth540/ })).toBeDefined()
+  expect(await ui.find({ key: 'svc:Queue' })).toBeDefined()
+  expect(await ui.find({ key: 'q:Queue:Queue depth', text: /^Queue depth540/ })).toBeDefined()
   expect(await ui.find({ key: 'svc:Checkout' })).toBeDefined()
+})
+
+test('in a card with more than one service, every service gets a heading, one query or many', async ($, on) => {
+  const mixed = { ...RESULT, problems: [...RESULT.problems, problem('API', 'Payments', 'Production', 'Warnings', 2, 'logs', '9', 'above 5')] }
+  const { ui } = await mounted($, on, mixed)
+  expect(await ui.find({ key: 'svc:Checkout' })).toBeDefined()
+  expect(await ui.find({ key: 'svc:Payments' })).toBeDefined()
+  expect(await ui.find({ key: 'q:Payments:Warnings', text: /^Warnings/ })).toBeDefined()
+})
+
+test('a service heading sits on a tinted band on the desktop, and plain in the terminal', async ($, on) => {
+  const { ui } = await mounted($, on)
+  expect((await ui.findAll({ key: 'svc:Checkout' }))[0].props.backgroundColor).toBe('#8A8A8A1A')
+  const terminal = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
+  expect((await terminal.findAll({ key: 'svc:Checkout' }))[0].props.backgroundColor).toBeUndefined()
+})
+
+test('a row\'s label is one text, cut once at the end when long', async ($, on) => {
+  const { ui } = await mounted($, on)
+  const row = (await ui.findAll({ key: 'q:Queue:Queue depth' }))[0]
+  const texts = row.children[1].children  // after the priority badge
+  expect(texts).toHaveLength(1)
+  const label = texts[0]
+  expect(label.type).toBe('Text')
+  expect(label.props.wrap).toBe('truncate-end')
+  expect(textOf(label)).toBe('Queue depth')
 })
 
 test('each row turns its own notifications off and on; the config can keep one off', async ($, on) => {
   const { ui, seen } = await mounted($, on)
   await ui.press({ key: 'bell:API|Checkout|Production|Error logs' })
   expect(seen.quiet).toEqual(['API|Checkout|Production|Error logs'])
-  expect(await ui.find({ key: 'bell:API|Checkout|Production|Error logs', text: 'Off' })).toBeDefined()
+  expect(await iconOf(ui, 'bell:API|Checkout|Production|Error logs')).toBe('notifications off')
   await ui.press({ key: 'bell:API|Checkout|Production|Error logs' })
   expect(seen.quiet).toEqual([])
   // notify: false in the config: a mark, no toggle.
@@ -226,10 +270,10 @@ test('history lists past runs with the window each checked, and opens one with i
 test('pull requests show the chosen span, grouped by repo, freshest first, new ones marked', async ($, on) => {
   const { ui } = await mounted($, on, RESULT, PRS)
   const prKeys = async () => (await ui.findAll({ type: 'Box' })).map((b: any) => String(b.key)).filter(k => k.startsWith('pr:'))
-  expect(await ui.find({ key: 'prs', text: /^2 open · last 3 days · Last refresh (.* )?\d\d:40/ })).toBeDefined()
+  expect(await ui.find({ key: 'prs', text: /^2 open.* · Last refresh (.* )?\d\d:40/ })).toBeDefined()
   expect(await prKeys()).toEqual(['pr:acme/checkout-api#12', 'pr:acme/checkout-api#15'])
-  expect(await ui.find({ key: 'pr:acme/checkout-api#12', text: /^#12Retry failed orderssam2h$/ })).toBeDefined()
-  expect(await ui.find({ key: 'pr:acme/checkout-api#15', text: /^#15Bump the HTTP clientdependabot2d$/ })).toBeDefined()
+  expect(await ui.find({ key: 'pr:acme/checkout-api#12', text: /^Retry failed ordersWaiting on you#12sam14 files\+610−288idle 2h2$/ })).toBeDefined()
+  expect(await ui.find({ key: 'pr:acme/checkout-api#15', text: /^Bump the HTTP clientWaiting on review#15dependabotidle 2d$/ })).toBeDefined()
   // Icons are our own Svgs on the desktop, each named for a screen reader.
   const alts = (await ui.findAll({ type: 'Svg' })).map((i: any) => i.props.alt)
   expect(alts).toEqual(expect.arrayContaining(['new', 'CI failing', 'lee: approved', 'max: pending']))
@@ -238,12 +282,235 @@ test('pull requests show the chosen span, grouped by repo, freshest first, new o
   expect(await prKeys()).toEqual(['pr:acme/checkout-api#12', 'pr:acme/checkout-api#15', 'pr:acme/checkout-worker#7'])
 })
 
-test('investigate sends the problem to Claude', async ($, on) => {
-  const { ui, seen } = await mounted($, on)
-  await ui.press({ key: 'inv:API@Production' })
+test('a row shows its last runs, since when it is over its line, and which way it moved; a new one says new', async ($, on) => {
+  const { ui } = await mounted($, on)
+  const row = await ui.find({ key: 'q:Checkout:Error logs' })
+  expect(await ui.find({ key: 'q:Checkout:Error logs', text: new RegExp(`since ${clock(SINCE)}`) })).toBeDefined()
+  expect(await ui.find({ key: 'q:Checkout:Error logs', text: /↑72/ })).toBeDefined()
+  expect(row).toBeDefined()
+  const alts = (await ui.findAll({ type: 'Svg' })).map((i: any) => i.props.alt)
+  expect(alts).toContain('Error logs over the last 4 runs')
+  expect(await ui.find({ key: 'q:Checkout:Slow requests', text: /new/ })).toBeDefined()
+  // The threshold it crossed is no longer drawn: a row is only there because it crossed it.
+  expect(await ui.find({ key: 'q:Checkout:Error logs', text: /above 20/ })).toBeUndefined()
+})
+
+const at = (bodyColumns: number) => ({ ...PANE, props: { ...PANE.props, bodyColumns } }) as any
+const svgAlts = (node: any): string[] => node.type === 'Svg' ? [node.props.alt] : (node.children ?? []).flatMap((c: any) => (typeof c === 'string' ? [] : svgAlts(c)))
+const textOf = (node: any): string => (typeof node === 'string' ? node : (node.children ?? []).map(textOf).join(''))
+
+test('wide, a row has everything on one line: its chart, since when, what it reads, and its value', async ($, on) => {
+  const { ui } = await mounted($, on, RESULT, at(120))
+  const row = (await ui.findAll({ key: 'q:Checkout:Error logs' }))[0]
+  expect(row.props.flexDirection).toBe('row')
+  expect(textOf(row)).toContain('since')
+  expect(svgAlts(row)).toEqual(expect.arrayContaining(['Error logs over the last 4 runs', 'logs']))
+})
+
+test('medium, a row drops what it reads, so its label keeps its room', async ($, on) => {
+  const { ui } = await mounted($, on, RESULT, at(80))
+  const row = (await ui.findAll({ key: 'q:Checkout:Error logs' }))[0]
+  expect(row.props.flexDirection).toBe('row')
+  expect(textOf(row)).toContain('since')
+  expect(svgAlts(row)).toContain('Error logs over the last 4 runs')
+  expect(svgAlts(row)).not.toContain('logs')
+})
+
+test('narrow, a row keeps its label, value and controls on one line and gives its chart the line beneath', async ($, on) => {
+  const { ui } = await mounted($, on, RESULT, at(40))
+  const row = (await ui.findAll({ key: 'q:Checkout:Error logs' }))[0]
+  expect(row.props.flexDirection).toBe('column')
+  const [first, second] = row.children
+  expect(svgAlts(first)).toEqual(expect.arrayContaining(['notifications on', 'Investigate']))
+  expect(svgAlts(second)).toContain('Error logs over the last 4 runs')
+  expect(textOf(second)).toContain('since')
+})
+
+test('the window is chosen in the header; three filters stay below, named short when narrow', async ($, on) => {
+  const { ui: wide } = await mounted($, on, { ...RESULT, window: '15m' }, at(120), { window: '1h' })
+  expect(await wide.find({ key: 'header', type: 'Box' })).toBeDefined()
+  expect((await wide.findAll({ key: 'header' }))[0].children.flat(9).some((c: any) => c?.key === 'window' || JSON.stringify(c ?? '').includes('"window"'))).toBe(true)
+  expect((await wide.findAll({ key: 'filters' }))[0].children.filter(Boolean)).toHaveLength(3)
+  // The config's own window, not the last run's: that run may have checked another window picked earlier.
+  expect((await wide.findAll({ key: 'window' }))[0].props.options[0].label).toBe('Config: last hour')
+  await wide.unmount()
+  const narrow = await $.ui.mount(at(40))
+  expect((await narrow.findAll({ key: 'priorities' }))[0].props.options[0].label).toBe('Priority')
+  expect((await narrow.findAll({ key: 'names' }))[0].props.options[0].label).toBe('Repository')
+  expect((await narrow.findAll({ key: 'envs' }))[0].props.options[0].label).toBe('Env')
+})
+
+test('Refresh stays on screen however narrow: the header wraps rather than clip it', async ($, on) => {
+  const { ui: tiny } = await mounted($, on, RESULT, at(30))
+  expect(await tiny.find({ key: 'check:watch' })).toBeDefined()
+  expect((await tiny.findAll({ key: 'header' }))[0].props.flexWrap).toBe('wrap')
+})
+
+test('a row with fewer than three counts shows since when, without a chart that would read as a glitch', async ($, on) => {
+  const sparse = { ...RESULT, problems: [problem('API', 'Checkout', 'Production', 'Error logs', 1, 'logs', '72', 'above 20',
+    { raw: 72, trend: { values: [null, null, 60, 72], since: SINCE, previous: 60, isNew: false } })] }
+  const { ui } = await mounted($, on, sparse)
+  const row = (await ui.findAll({ key: 'q:Checkout:Error logs' }))[0]
+  expect(svgAlts(row).some(a => a.includes('over the last'))).toBe(false)
+  expect(textOf(row)).toContain('since')
+})
+
+test('narrow, a row without enough runs for a chart still says since when, on the line beneath', async ($, on) => {
+  const sparse = { ...RESULT, problems: [problem('API', 'Checkout', 'Production', 'Error logs', 1, 'logs', '72', 'above 20',
+    { raw: 72, trend: { values: [null, 60, 72], since: SINCE, previous: 60, isNew: false } })] }
+  const { ui } = await mounted($, on, sparse, at(40))
+  const row = (await ui.findAll({ key: 'q:Checkout:Error logs' }))[0]
+  expect(textOf(row.children[1])).toBe(`since ${clock(SINCE)}`)
+})
+
+test('since names the day when it is not today, so it never reads later than the last check', async ($, on) => {
+  const yesterday = new Date(Date.now() - 86_400_000).toISOString()
+  const old = { ...RESULT, problems: [problem('API', 'Checkout', 'Production', 'Error logs', 1, 'logs', '72', 'above 20',
+    { raw: 72, trend: { values: [60, 66, 72], since: yesterday, previous: 66, isNew: false } })] }
+  const { ui } = await mounted($, on, old, at(120))
+  const weekday = new Date(yesterday).toLocaleDateString([], { weekday: 'short' })
+  expect(await ui.find({ key: 'q:Checkout:Error logs', text: new RegExp(`since ${weekday} ${clock(yesterday)}`) })).toBeDefined()
+})
+
+test('medium, a row without a chart shows since when in the chart\'s column', async ($, on) => {
+  const sparse = { ...RESULT, problems: [problem('API', 'Checkout', 'Production', 'Error logs', 1, 'logs', '72', 'above 20',
+    { raw: 72, trend: { values: [null, 60, 72], since: SINCE, previous: 60, isNew: false } })] }
+  const { ui } = await mounted($, on, sparse, at(80))
+  expect(await ui.find({ key: 'history', text: `since ${clock(SINCE)}` })).toBeDefined()
+})
+
+test('the terminal draws a divider as one full line, clipped rather than cut with an ellipsis', async ($, on) => {
+  await mounted($, on)
+  const terminal = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
+  const sep = (await terminal.findAll({ key: 'sep:watch' }))[0]
+  expect(sep.props.height).toBe(1)
+  expect(sep.children[0].props.wrap).toBe('wrap')
+})
+
+test('the history column is as wide as the widest history on screen, so labels keep the room', async ($, on) => {
+  const weekAgo = new Date(Date.now() - 3 * 86_400_000).toISOString()
+  const older = { ...RESULT, problems: [...RESULT.problems.slice(0, 1), problem('API', 'Checkout', 'Production', 'Latency', 1, 'logs', '9', 'above 5',
+    { raw: 9, trend: { values: [6, 7, 9], since: weekAgo, previous: 7, isNew: false } })] }
+  const { ui } = await mounted($, on, older, at(120))
+  // `since Tue 14:58` is four cells longer than `since 14:58`: both rows take the longer.
+  const widths = (await ui.findAll({ key: 'history', type: 'Box' })).map((b: any) => b.props.width)
+  expect(widths).toEqual([26, 26])
+})
+
+test('a card whose title wraps keeps its priority beside the first line', async ($, on) => {
+  const { ui } = await mounted($, on, RESULT, at(40))
+  expect((await ui.findAll({ key: 'card-head:API@Production' }))[0].props.alignItems).toBe('flex-start')
+})
+
+test('narrow, History stays in the header as an icon rather than taking a line of its own', async ($, on) => {
+  const { ui } = await mounted($, on, RESULT, at(40))
+  const header = (await ui.findAll({ key: 'header' }))[0]
+  expect(svgAlts(header)).toContain('History')
+})
+
+test('VS Code draws every Button filled, so its controls are symbol buttons, not an invisible button over an icon', async ($, on) => {
+  await mounted($, on)
+  const code = await $.ui.mount({ ...PANE, surface: 'vscode' } as any)
+  const bell = (await code.findAll({ key: 'bell:API|Checkout|Production|Error logs' }))[0]
+  expect(bell.type).toBe('Button')
+  expect(bell.props.label).toBe('◉')
+  expect((await code.findAll({ key: 'inv:API|Checkout|Production|Error logs' }))[0].props.label).toBe('✻')
+})
+
+test('a chart draws its threshold as a dashed line', async ($, on) => {
+  const { ui } = await mounted($, on)
+  const chart = (await ui.findAll({ type: 'Svg' })).find((i: any) => i.props.alt === 'Error logs over the last 4 runs')
+  expect(chart.props.source).toContain('stroke-dasharray')
+})
+
+test('the terminal draws the last runs as block characters, from where its history begins', async ($, on) => {
+  await mounted($, on)
+  const terminal = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
+  // Runs before the entry's history began are not drawn: no blank lead-in that reads as indentation.
+  expect(await terminal.find({ key: 'q:Checkout:Error logs', text: /logs▁▅█/ })).toBeDefined()
+})
+
+test('investigate in the current session sends the problem to Claude', async ($, on) => {
+  const { ui, seen } = await mounted($, on, RESULT, PANE, { investigate: { session: 'current' } })
+  await ui.press({ key: 'inv:API|Checkout|Production|Error logs' })
   expect(seen.submitted[0]).toContain('Investigate API (acme/checkout-api) in Production')
   expect(seen.submitted[0]).toContain('- P1 Checkout: Error logs is 72 (above 20), logs query `service:x Error logs`')
   expect(seen.submitted[0]).toContain('https://app.datadoghq.com/Error logs')
+  // One query each: the card's other rows have their own button.
+  expect(seen.submitted[0]).not.toContain('Slow requests')
+})
+
+test('investigate on the desktop opens a new Code session in the same folder', async ($, on) => {
+  const { ui, seen } = await mounted($, on)
+  await ui.press({ key: 'inv:API|Checkout|Production|Error logs' })
+  expect(seen.submitted).toEqual([])
+  const [cmd, link] = seen.runs.find(r => r[0] === 'open')!
+  const url = new URL(link!)
+  expect([cmd, url.protocol, url.host, url.pathname]).toEqual(['open', 'claude:', 'code', '/new'])
+  expect(url.searchParams.get('folder')).toBe('/work')
+  expect(url.searchParams.get('q')).toContain('Investigate API (acme/checkout-api) in Production')
+})
+
+test('investigate in the terminal opens a new terminal window running claude in the same folder', async ($, on) => {
+  const { seen } = await mounted($, on)
+  const terminal = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
+  // The terminal's controls are symbols, not emoji: Investigate and the row's bell.
+  expect((await terminal.findAll({ key: 'inv:API|Checkout|Production|Error logs' }))[0].props.label).toBe('✻')
+  expect((await terminal.findAll({ key: 'bell:API|Checkout|Production|Error logs' }))[0].props.label).toBe('◉')
+  await terminal.press({ key: 'inv:API|Checkout|Production|Error logs' })
+  expect(seen.submitted).toEqual([])
+  const run = seen.runs.find(r => r[0] === 'osascript')!
+  const command = run.at(-1)!
+  expect(command.startsWith(`cd '/work' && claude $'Investigate API (acme/checkout-api) in Production`)).toBe(true)
+  expect(command).toContain(`\\n- P1 Checkout: Error logs is 72`)
+  expect(command).not.toContain('\n')
+})
+
+test('investigate runs the configured skill with the problem', async ($, on) => {
+  const { ui, seen } = await mounted($, on, RESULT, PANE, { investigate: { session: 'current', skill: 'triage' } })
+  await ui.press({ key: 'inv:API|Checkout|Production|Error logs' })
+  expect(seen.commands[0]!.startsWith('/triage Investigate API (acme/checkout-api) in Production')).toBe(true)
+  expect(seen.submitted).toEqual([])
+})
+
+test('investigate fills the configured prompt and problem templates', async ($, on) => {
+  const { ui, seen } = await mounted($, on, RESULT, PANE, { investigate: { session: 'current',
+    prompt: 'Look at {{name}} ({{repo}}) in {{env}}, {{window}} to {{checkedAt}}, {{from}}–{{to}}.\n{{problems}}\nNo tests. {{nope}}',
+    problem: '* {{priority}} {{service}} {{label}}={{value}} [{{alert}}] {{source}} `{{query}}` {{link}}' } })
+  await ui.press({ key: 'inv:API|Checkout|Production|Error logs' })
+  expect(seen.submitted[0]).toBe([
+    'Look at API (acme/checkout-api) in Production, 1h to 2026-10-16T13:34:00+00:00, 2026-10-16T12:34:00+00:00–2026-10-16T13:34:00+00:00.',
+    '* P1 Checkout Error logs=72 [above 20] logs `service:x Error logs` https://app.datadoghq.com/Error logs',
+    // A misspelled variable stays as written.
+    'No tests. {{nope}}',
+  ].join('\n'))
+})
+
+test("a query's own investigate templates override the general ones, each on its own", async ($, on) => {
+  const { ui, seen } = await mounted($, on, RESULT, PANE, {
+    investigate: { session: 'current', prompt: 'General {{problems}}', problem: '{{label}} is {{value}}' },
+    repos: [{ repo: 'acme/checkout-api', name: 'API', queries: [
+      { service: 'Checkout', env: 'Production', label: 'Error logs', investigate: { prompt: 'Own: {{problems}}' } },
+    ] }],
+  })
+  await ui.press({ key: 'inv:API|Checkout|Production|Error logs' })
+  expect(seen.submitted[0]).toBe('Own: Error logs is 72')
+  await ui.press({ key: 'inv:API|Checkout|Production|Slow requests' })
+  expect(seen.submitted[1]).toBe('General Slow requests is 3.70s')
+})
+
+test('a new session starts with the configured skill', async ($, on) => {
+  const { ui, seen } = await mounted($, on, RESULT, PANE, { investigate: { skill: 'triage' } })
+  await ui.press({ key: 'inv:API|Checkout|Production|Error logs' })
+  const link = new URL(seen.runs.find(r => r[0] === 'open')!.at(-1)!)
+  expect(link.searchParams.get('q')!.startsWith('/triage Investigate API')).toBe(true)
+})
+
+test('investigate falls back to the current session when a new one cannot open', async ($, on) => {
+  const { ui, seen } = await mounted($, on)
+  seen.refuse.push('open')
+  await ui.press({ key: 'inv:API|Checkout|Production|Error logs' })
+  expect(seen.submitted[0]).toContain('Investigate API (acme/checkout-api) in Production')
 })
 
 test('Reload config shows environments added to the config since the pane opened', async ($, on) => {
@@ -281,6 +548,51 @@ test('before the first run the pane says where the config goes', async ($, on) =
   expect(await ui.find({ key: 'check' })).toBeDefined()
 })
 
+test('open pull requests that need you come first, under Needs you; the rest under Everyone else', async ($, on) => {
+  const { ui } = await mounted($, on, RESULT, PRS)
+  // max is asked to review #12.
+  expect(await ui.find({ key: 'section:you', text: /Needs you1.*Retry failed orders/ })).toBeDefined()
+  expect(await ui.find({ key: 'section:rest', text: /Everyone else1.*Bump the HTTP client/ })).toBeDefined()
+})
+
+test('a pull request says who it waits on, how big it is, how long it has been idle and its open threads', async ($, on) => {
+  const { ui } = await mounted($, on, RESULT, PRS)
+  expect(await ui.find({ key: 'pr:acme/checkout-api#12', text: /Waiting on you/ })).toBeDefined()
+  expect(await ui.find({ key: 'pr:acme/checkout-api#12', text: /14 files\+610−288/ })).toBeDefined()
+  expect(await ui.find({ key: 'pr:acme/checkout-api#12', text: /idle 2h/ })).toBeDefined()
+  expect(await ui.find({ key: 'pr:acme/checkout-api#12', text: /2 open threads|2$/ })).toBeDefined()
+  expect(await ui.find({ key: 'pr:acme/checkout-api#15', text: /Waiting on review/ })).toBeDefined()
+})
+
+test('a pull request\'s title is its link; its number is plain', async ($, on) => {
+  const { ui } = await mounted($, on, RESULT, PRS)
+  const links = (await ui.findAll({ type: 'Link' })).map((l: any) => l.props)
+  expect(links).toEqual(expect.arrayContaining([{ href: 'https://github.com/acme/checkout-api/pull/12', label: 'Retry failed orders' }]))
+  expect(links.some((l: any) => l.label === '#12')).toBe(false)
+})
+
+test('pull requests keep the span in the header and three filters below', async ($, on) => {
+  const { ui } = await mounted($, on, RESULT, PRS)
+  expect(JSON.stringify((await ui.findAll({ key: 'prs' }))[0])).toContain('"span"')
+  expect((await ui.findAll({ key: 'filters' }))[0].children.filter(Boolean)).toHaveLength(3)
+})
+
+test('narrow, a pull request gives its title the whole first line; who it waits on, CI and reviewers get the third', async ($, on) => {
+  const { ui } = await mounted($, on, RESULT, { ...PRS, props: { ...PRS.props, bodyColumns: 40 } })
+  const row = (await ui.findAll({ key: 'pr:acme/checkout-api#12' }))[0]
+  expect(row.children).toHaveLength(3)
+  expect(textOf(row.children[0])).not.toContain('Waiting')
+  expect(textOf(row.children[2])).toContain('Waiting on you')
+})
+
+test('a pull request idle a week or more says so in amber', async ($, on) => {
+  const stale = { ...RESULT, pullRequests: [{ ...pr('acme/checkout-api', 21, 'Old idea', 'kim', 24 * 8, 24 * 9, null) }] }
+  const { ui } = await mounted($, on, stale, PRS)
+  await ui.select({ key: 'span', value: 'month' })
+  const idle = (await ui.findAll({ type: 'Text' })).find((t: any) => textOf(t) === 'idle 8d')
+  expect(idle.props.color).toBe('warning')
+})
+
 test('pull requests show even before observability has run', async ($, on) => {
   const { ui } = await mounted($, on, { ...RESULT, checkedAt: null, problems: [] })
   expect(await ui.find({ key: 'watch', text: /not checked yet/ })).toBeDefined()
@@ -309,7 +621,9 @@ test('Config shows the schedule: whether runs are on, when the next is, and what
   const { ui } = await mounted($, on, RESULT, CONFIG, { ...EDITABLE, schedule: '0 9-18 * * 1-5' })
   expect(await ui.find({ key: 'schedule-state', text: /^Running · next (.* )?19:00$/ })).toBeDefined()
   expect((await ui.findAll({ key: 'cron:' }))[0].props.value).toBe('1h')
-  expect(await ui.find({ key: 'cron-line:', text: 'Every hour from 09:00 to 18:00, Monday to Friday · 0 9-18 * * 1-5' })).toBeDefined()
+  // The plain sentence alone: the cron line it stands for is the config's business.
+  expect(await ui.find({ key: 'cron-line:', text: 'Every hour from 09:00 to 18:00, Monday to Friday' })).toBeDefined()
+  expect(await ui.find({ key: 'work:', text: 'Use work hours' })).toBeDefined()
   expect(await ui.find({ key: 'reload-config' })).toBeDefined()
 })
 
@@ -334,24 +648,25 @@ test('Pause stops scheduled runs until Resume, and the header says so', async ($
 
 test('the builder makes the cron line from how often, the hours and the days, says it in words, and Save writes it', async ($, on) => {
   const { ui, seen } = await mounted($, on, RESULT, CONFIG, { ...EDITABLE, schedule: '0 9-18 * * 1-5' })
+  // The line says the schedule in words; Save writes the cron line it stands for.
   const line = async (text: RegExp) => expect(await ui.find({ key: 'cron-line:', text })).toBeDefined()
   expect((await ui.findAll({ key: 'from:' }))[0].props.value).toBe('9')
   expect((await ui.findAll({ key: 'to:' }))[0].props.value).toBe('18')
   expect(await ui.find({ key: 'day:1:', text: '☑ Mon' })).toBeDefined()
   expect(await ui.find({ key: 'day:6:', text: '☐ Sat' })).toBeDefined()
   await ui.select({ key: 'cron:', value: '30m' })
-  await line(/· \*\/30 9-18 \* \* 1-5$/)
+  await line(/^Every 30 minutes from 09:00 to 18:30, Monday to Friday$/)
   await ui.press({ key: 'day:6:' })
-  await line(/· \*\/30 9-18 \* \* 1-6$/)
+  await line(/^Every 30 minutes from 09:00 to 18:30, Monday to Saturday$/)
   await ui.select({ key: 'to:', value: '20' })
-  await line(/· \*\/30 9-20 \* \* 1-6$/)
+  await line(/^Every 30 minutes from 09:00 to 20:30, Monday to Saturday$/)
   await ui.press({ key: 'allday:' })
-  await line(/· \*\/30 \* \* \* 1-6$/)
+  await line(/^Every 30 minutes, all day, Monday to Saturday$/)
   expect(await ui.find({ key: 'from:' })).toBeUndefined()
   await ui.select({ key: 'cron:', value: 'twice' })
   await line(/^Twice a day at 09:00 and 13:00, Monday to Saturday/)
   await ui.press({ key: 'work:' })
-  await line(/· 0 9-18 \* \* 1-5$/)
+  await line(/^Every hour from 09:00 to 18:00, Monday to Friday$/)
   await ui.select({ key: 'cron:', value: '30m' })
   expect(seen.saved).toEqual([])
   await ui.press({ key: 'save-config' })
@@ -364,7 +679,7 @@ test('pull requests follow Watch until given a schedule of their own', async ($,
   expect(await ui.find({ key: 'sep:prs-schedule' })).toBeDefined() // a line between Watch's schedule and theirs
   expect(await ui.find({ key: 'from:prs' })).toBeUndefined()
   await ui.select({ key: 'cron:prs', value: '15m' })
-  expect(await ui.find({ key: 'cron-line:prs', text: /· \*\/15 9-18 \* \* 1-5$/ })).toBeDefined()
+  expect(await ui.find({ key: 'cron-line:prs', text: /^Every 15 minutes from 09:00 to 18:45, Monday to Friday$/ })).toBeDefined()
   await ui.press({ key: 'save-config' })
   expect([saved(seen).schedule, saved(seen).pullRequestsSchedule]).toEqual(['0 9-18 * * 1-5', '*/15 9-18 * * 1-5'])
 })
@@ -400,7 +715,7 @@ test('the Hide bots checkbox hides dependabot by default, and shows it again', a
   expect(await ui.find({ key: 'bots', text: '☑ Hide bots' })).toBeDefined()
   expect(await ui.find({ key: 'pr:acme/checkout-api#15' })).toBeUndefined()
   expect(await ui.find({ key: 'pr:acme/checkout-api#12' })).toBeDefined()
-  expect(await ui.find({ key: 'prs', text: /^1 open · last 3 days/ })).toBeDefined()
+  expect(await ui.find({ key: 'prs', text: /^1 open/ })).toBeDefined()
   await ui.press({ key: 'bots' })
   expect(await ui.find({ key: 'pr:acme/checkout-api#15' })).toBeDefined()
 })
@@ -430,17 +745,6 @@ test('a long list draws in pages of 30 with page numbers; the count stays the wh
   expect((await ui.findAll({ key: 'prs-page:1' }))[0].props.variant).toBe('primary') // a new span starts at page 1
 })
 
-test('an open repository lists its queries in pages of 30 too', async ($, on) => {
-  const config = { ...EDITABLE, repos: [{ ...EDITABLE.repos[0]!, queries: Array.from({ length: 40 }, (_, i) => ({ ...EDITABLE.repos[0]!.queries[0]!, label: `Q${i}` })) }] }
-  const { ui } = await mounted($, on, RESULT, CONFIG, config)
-  await ui.press({ key: 'repo:repos.0' })
-  const rows = async () => (await ui.findAll({ type: 'Box' })).filter((b: any) => String(b.key).startsWith('query:')).length
-  expect(await rows()).toBe(30)
-  await ui.press({ key: 'queries-page:2' })
-  expect(await rows()).toBe(10)
-  expect(await ui.find({ key: 'query:repos.0.queries.35' })).toBeDefined()
-})
-
 test('spans stop at Last month: closed pull requests are fetched for 30 days', async ($, on) => {
   const { ui } = await mounted($, on, RESULT, PRS)
   expect((await ui.findAll({ key: 'span' }))[0].props.options.map((o: any) => o.label)).toEqual(['Today', 'Last 3 days', 'Last week', 'Last month'])
@@ -451,12 +755,12 @@ test('the state picker offers Open, Merged and Closed; Closed is closed without 
   expect((await ui.findAll({ key: 'state' }))[0].props.options.map((o: any) => o.label)).toEqual(['Open', 'Merged', 'Closed'])
   expect(await ui.find({ key: 'pr:acme/checkout-api#9' })).toBeUndefined()
   await ui.select({ key: 'state', value: 'merged' })
-  expect(await ui.find({ key: 'prs', text: /^1 merged · last 3 days/ })).toBeDefined()
-  expect(await ui.find({ key: 'pr:acme/checkout-api#9', text: /^#9Shipped retrieskim5h$/ })).toBeDefined()
+  expect(await ui.find({ key: 'prs', text: /^1 merged/ })).toBeDefined()
+  expect(await ui.find({ key: 'pr:acme/checkout-api#9', text: /^Shipped retries#9kim5h$/ })).toBeDefined()
   expect(await ui.find({ key: 'pr:acme/checkout-api#8' })).toBeUndefined()
   await ui.select({ key: 'state', value: 'closed' })
-  expect(await ui.find({ key: 'prs', text: /^1 closed · last 3 days/ })).toBeDefined()
-  expect(await ui.find({ key: 'pr:acme/checkout-api#8', text: /^#8Dropped ideakim1d$/ })).toBeDefined()
+  expect(await ui.find({ key: 'prs', text: /^1 closed/ })).toBeDefined()
+  expect(await ui.find({ key: 'pr:acme/checkout-api#8', text: /^Dropped idea#8kim1d$/ })).toBeDefined()
   expect(await ui.find({ key: 'pr:acme/checkout-api#9' })).toBeUndefined()
   expect(await ui.find({ key: 'pr:acme/checkout-api#12' })).toBeUndefined()
 })
@@ -471,8 +775,8 @@ test('in the terminal, filters are buttons that step through their values, and m
   await ui.press({ key: 'span' })
   expect(await ui.find({ key: 'span', text: 'Last week' })).toBeDefined()
   const row = (await ui.findAll({ key: 'pr:acme/checkout-api#12' }))[0]
-  expect(row.props.flexDirection).toBe('row')
-  expect(await ui.find({ key: 'pr:acme/checkout-api#12', text: 'new#12Retry failed orderssam2hci failinglee approvedmax pending' })).toBeDefined()
+  expect(row.props.flexDirection).toBe('column')
+  expect(await ui.find({ key: 'pr:acme/checkout-api#12', text: 'newRetry failed ordersWaiting on you#12sam14 files+610−288idle 2h2 open threadsci failinglee approvedmax pending' })).toBeDefined()
 })
 
 test('in a narrow terminal, a pull request splits onto two lines', async ($, on) => {
@@ -499,7 +803,7 @@ test('pull requests can be listed without grouping, each row naming its repo', a
   await ui.press({ key: 'grouping' })
   expect(await ui.find({ key: 'grouping', text: '☐ Group by repository' })).toBeDefined()
   expect(await ui.find({ key: 'repo:acme/checkout-api' })).toBeUndefined()
-  expect(await ui.find({ key: 'pr:acme/checkout-api#12', text: /^#12checkout-apiRetry failed orders/ })).toBeDefined()
+  expect(await ui.find({ key: 'pr:acme/checkout-api#12', text: /^Retry failed ordersWaiting on you#12checkout-api/ })).toBeDefined()
 })
 
 test('while a part refreshes, its button gives way to a plain line saying since when', async ($, on) => {
@@ -579,7 +883,7 @@ test('Latest leaves the history list', async ($, on) => {
 
 test('with nothing over its line, All clear sits in the middle of the card area', async ($, on) => {
   const { ui } = await mounted($, on, { ...RESULT, problems: [] })
-  expect(await ui.find({ key: 'watch', text: /^Checked · last hour/ })).toBeDefined()
+  expect(await ui.find({ key: 'watch', text: /^Checked/ })).toBeDefined()
   const clear = (await ui.findAll({ key: 'clear' }))[0]
   expect(clear.props.alignItems).toBe('center')
   expect(await ui.find({ key: 'clear', text: 'All clearNo query crossed its alert line' })).toBeDefined()
@@ -589,7 +893,7 @@ test('Mute in Config stops every notification until unmuted; the other panes car
   const { ui, seen } = await mounted($, on, RESULT, CONFIG)
   await ui.press({ key: 'mute' })
   expect(seen.muted).toBe(true)
-  expect(await ui.find({ key: 'mute', text: 'Unmute' })).toBeDefined()
+  expect(await ui.find({ key: 'mute', text: 'Unmute all' })).toBeDefined()
   await ui.press({ key: 'mute' })
   expect(seen.muted).toBe(false)
   expect(await (await $.ui.mount(PANE)).find({ key: 'mute' })).toBeUndefined()
@@ -607,25 +911,59 @@ const saved = (seen: any) => seen.saved.at(-1)
 test('Config names the file, what it holds and that it holds to the schema', async ($, on) => {
   const { ui } = await mounted($, on, RESULT, CONFIG, EDITABLE)
   expect(await ui.find({ key: 'config-file', text: /~\/\.on-my-watch\/config\.json/ })).toBeDefined()
-  expect(await ui.find({ key: 'config-counts', text: /^1 repository · 1 query · 1 environment\s*· valid/ })).toBeDefined()
+  expect(await ui.find({ key: 'config-counts', text: /^1 repository · 1 query · 1 environment$/ })).toBeDefined()
+  // Its own line, no leading dot.
+  expect(await ui.find({ key: 'config-state', text: /^valid · read \d\d:\d\d$/ })).toBeDefined()
 })
 
-test('the chevron is part of the repository button, in the accent colour: pressing it folds and unfolds', async ($, on) => {
+test('Open in editor opens the config file with the system\'s opener', async ($, on) => {
+  const { ui, seen } = await mounted($, on, RESULT, CONFIG, EDITABLE)
+  await ui.press({ key: 'open-config' })
+  expect(seen.runs).toContainEqual(['open', '/home/me/.on-my-watch/config.json'])
+})
+
+test('narrow, each label sits above its field so the field and its hint get the width', async ($, on) => {
+  const { ui } = await mounted($, on, RESULT, { ...CONFIG, props: { ...CONFIG.props, bodyColumns: 40 } }, EDITABLE)
+  expect((await ui.findAll({ key: 'row:site' }))[0].props.flexDirection).toBe('column')
+})
+
+test('short settings get short fields', async ($, on) => {
   const { ui } = await mounted($, on, RESULT, CONFIG, EDITABLE)
-  const button = async () => (await ui.findAll({ key: 'repo:repos.0' }))[0]
-  expect(await ui.find({ key: 'repo:repos.0', text: /^▶ ?API$/ })).toBeDefined()
-  expect(JSON.stringify(await button())).toContain('"color":"claude"')
-  expect((await button()).props.label).toBe('▶ API') // the children's text, not a label drawn in their place
-  await ui.press({ key: 'repo:repos.0' })
-  expect(await ui.find({ key: 'repo:repos.0', text: /^▼ ?API$/ })).toBeDefined()
-  expect(await ui.find({ key: 'query:repos.0.queries.0' })).toBeDefined()
-  await ui.press({ key: 'repo:repos.0' })
-  expect(await ui.find({ key: 'query:repos.0.queries.0' })).toBeUndefined()
+  expect((await ui.findAll({ key: 'fill:set:window' }))[0].props.width).toBe(12)
+  expect((await ui.findAll({ key: 'fill:set:historyDays' }))[0].props.width).toBe(8)
+})
+
+test('on the desktop an environment group is a name and chips: × takes one out, + add picks one the queries use', async ($, on) => {
+  const doc = { ...EDITABLE, environments: { Production: ['Production', 'Canary'] },
+    repos: [{ ...EDITABLE.repos[0], queries: [...EDITABLE.repos[0]!.queries, { ...EDITABLE.repos[0]!.queries[0], env: 'Shadow' }] }] }
+  const { ui, seen } = await mounted($, on, RESULT, CONFIG, doc)
+  expect(await ui.find({ key: 'env-chip:0:Canary', text: 'Canary' })).toBeDefined()
+  await ui.press({ key: 'env-chip-remove:0:Canary' })
+  expect(saved(seen).environments).toEqual({ Production: ['Production'] })
+  const add = (await ui.findAll({ key: 'env-add:0' }))[0]
+  // Canary is in no group and no query any more, so only the queries' Shadow is left to add.
+  expect(add.props.options.map((o: any) => o.label)).toEqual(['+ add', 'Shadow'])
+  await ui.select({ key: 'env-add:0', value: 'Shadow' })
+  expect(saved(seen).environments).toEqual({ Production: ['Production', 'Shadow'] })
+})
+
+test('Remove is a dim plain button, so three of them do not pull the eye', async ($, on) => {
+  const { ui } = await mounted($, on, RESULT, CONFIG, { ...EDITABLE, environments: { Production: ['Production'] } })
+  const remove = (await ui.findAll({ key: 'env-remove:0' }))[0]
+  // Its red on hover is the desktop's to draw; the test kit does not report hover styles.
+  expect([remove.props.plain, remove.props.dimColor, remove.props.label]).toEqual([true, true, 'Remove'])
+})
+
+test('on the desktop the bots are chips: × takes one out, typing a name adds one', async ($, on) => {
+  const { ui, seen } = await mounted($, on, RESULT, CONFIG, { ...EDITABLE, bots: ['dependabot', 'renovate'] })
+  await ui.press({ key: 'bot-chip-remove:renovate' })
+  expect(saved(seen).bots).toEqual(['dependabot'])
+  await ui.input({ key: 'bot-add', text: 'snyk-bot' })
+  expect(saved(seen).bots).toEqual(['dependabot', 'snyk-bot'])
 })
 
 test('no icon the Config pane draws repeats an attribute, which would make its SVG invalid', async ($, on) => {
   const { ui } = await mounted($, on, RESULT, CONFIG, EDITABLE)
-  await ui.press({ key: 'repo:repos.0' })
   for (const icon of await ui.findAll({ type: 'Svg' })) {
     for (const tag of String(icon.props.source).match(/<[a-z]+[^>]*>/g) ?? []) {
       const names = [...tag.matchAll(/\s([a-z-]+)=/g)].map(m => m[1])
@@ -634,13 +972,15 @@ test('no icon the Config pane draws repeats an attribute, which would make its S
   }
 })
 
-test('Enter in a field saves the whole config; an emptied list is taken out', async ($, on) => {
+test('Enter in a field saves the whole config; in the terminal an emptied list is taken out', async ($, on) => {
   const { ui, seen } = await mounted($, on, RESULT, CONFIG, EDITABLE)
+  const terminal = await $.ui.mount({ ...CONFIG, surface: 'terminal' } as any)
   expect(await ui.find({ key: 'save-config' })).toBeUndefined()
-  expect(await ui.find({ key: 'hint:bots', text: 'Separate usernames with commas: dependabot, renovate' })).toBeDefined()
+  expect(await terminal.find({ key: 'hint:bots', text: 'Separate usernames with commas: dependabot, renovate' })).toBeDefined()
+  expect(await ui.find({ key: 'hint:window', text: 'A number and m, h or d: 15m, 4h, 7d' })).toBeDefined()
   await ui.input({ key: 'set:site', text: 'datadoghq.eu' })
   expect(saved(seen).site).toBe('datadoghq.eu')
-  await ui.input({ key: 'set:bots', text: '' })
+  await terminal.input({ key: 'set:bots', text: '' })
   expect('bots' in saved(seen)).toBe(false)
 })
 
@@ -664,8 +1004,6 @@ test('fields the schema requires carry a red asterisk; optional ones do not', as
   const { ui } = await mounted($, on, RESULT, CONFIG, EDITABLE)
   expect(await ui.find({ key: 'label:site', text: 'Datadog site *' })).toBeDefined()
   expect(await ui.find({ key: 'label:historyDays', text: 'History rotation' })).toBeDefined()
-  await ui.press({ key: 'add:repos' })
-  expect(await ui.find({ key: 'label:field:repo', text: 'Repository (owner/name) *' })).toBeDefined()
 })
 
 test('every field label takes the same width, so the fields line up', async ($, on) => {
@@ -705,87 +1043,11 @@ test('a refused change says why and saves nothing', async ($, on) => {
   expect(await ui.find({ key: 'config-error', text: 'config.site: must be a known Datadog site' })).toBeDefined()
 })
 
-test('a repository opens to its queries; a new query is added from its form', async ($, on) => {
-  const { ui, seen } = await mounted($, on, RESULT, CONFIG, EDITABLE)
-  expect(await ui.find({ key: 'query:repos.0.queries.0' })).toBeUndefined()
-  await ui.press({ key: 'repo:repos.0' })
-  expect(await ui.find({ key: 'query:repos.0.queries.0', text: /^CheckoutProductionErrors/ })).toBeDefined()
-  await ui.press({ key: 'add:repos.0.queries' })
-  for (const [field, text] of [['service', 'Checkout'], ['label', 'Warnings'], ['query', 'service:api status:warn'], ['above', '50']])
-    await ui.input({ key: `field:${field}`, text, kind: 'change' })
-  // Environment and priority are picked from the config's own; Other… takes a new environment.
-  expect((await ui.findAll({ key: 'field:env' }))[0].props.options.map((o: any) => o.label)).toEqual(['Production', 'Other…'])
-  expect((await ui.findAll({ key: 'field:priority' }))[0].props.options.map((o: any) => o.label)).toEqual(['High', 'Medium', 'Low'])
-  await ui.select({ key: 'field:env', value: 'Production' })
-  await ui.select({ key: 'field:priority', value: '2' })
-  expect(await ui.find({ key: 'query-preview', text: 'service:api status:warn' })).toBeDefined()
-  expect(await ui.find({ key: 'field:compute' })).toBeDefined()
-  expect(await ui.find({ key: 'field:reduce' })).toBeUndefined()
-  expect(await ui.find({ key: 'row:field:line', text: /Line/ })).toBeDefined()
-  await ui.press({ key: 'form-save' })
-  expect(await ui.find({ key: 'query:repos.0.queries.1' })).toBeDefined()
-  await ui.press({ key: 'save-config' })
-  expect(saved(seen).repos[0].queries[1]).toEqual({ service: 'Checkout', label: 'Warnings', env: 'Production', priority: 2, source: 'logs', query: 'service:api status:warn', alert: { above: 50 } })
-})
-
-test('Save changes takes in a form still open, with settings typed too', async ($, on) => {
-  const { ui, seen } = await mounted($, on, RESULT, CONFIG, EDITABLE)
-  await ui.input({ key: 'set:window', text: '4h', kind: 'change' })
-  await ui.press({ key: 'repo:repos.0' })
-  await ui.press({ key: 'edit:repos.0.queries.0' })
-  await ui.input({ key: 'field:above', text: '30', kind: 'change' })
-  await ui.press({ key: 'save-config' })
-  expect([saved(seen).window, saved(seen).repos[0].queries[0].alert]).toEqual(['4h', { above: 30 }])
-})
-
-test('Save changes takes in a form still open', async ($, on) => {
-  const { ui, seen } = await mounted($, on, RESULT, CONFIG, EDITABLE)
-  await ui.press({ key: 'repo:repos.0' })
-  await ui.press({ key: 'edit:repos.0.queries.0' })
-  await ui.input({ key: 'field:above', text: '30', kind: 'change' })
-  await ui.press({ key: 'save-config' })
-  expect(saved(seen).repos[0].queries[0].alert).toEqual({ above: 30 })
-})
-
-test('editing a query keeps what the form does not show, and Delete asks first', async ($, on) => {
-  const config = { ...EDITABLE, repos: [{ ...EDITABLE.repos[0]!, queries: [{ ...EDITABLE.repos[0]!.queries[0]!, schedule: '*/15 * * * *' }] }] }
-  const { ui, seen } = await mounted($, on, RESULT, CONFIG, config)
-  await ui.press({ key: 'repo:repos.0' })
-  await ui.press({ key: 'edit:repos.0.queries.0' })
-  await ui.input({ key: 'field:above', text: '30', kind: 'change' })
-  await ui.press({ key: 'form-save' })
-  await ui.press({ key: 'save-config' })
-  expect(saved(seen).repos[0].queries[0]).toMatchObject({ label: 'Errors', alert: { above: 30 }, schedule: '*/15 * * * *' })
-  await ui.press({ key: 'delete:repos.0.queries.0' })
-  expect(await ui.find({ key: 'query:repos.0.queries.0' })).toBeDefined()
-  await ui.press({ key: 'delete-yes:repos.0.queries.0' })
-  await ui.press({ key: 'save-config' })
-  expect(saved(seen).repos[0].queries).toEqual([])
-})
-
-test('a new environment is typed after Other…', async ($, on) => {
-  const { ui, seen } = await mounted($, on, RESULT, CONFIG, EDITABLE)
-  await ui.press({ key: 'repo:repos.0' })
-  await ui.press({ key: 'edit:repos.0.queries.0' })
-  await ui.select({ key: 'field:env', value: 'other' })
-  await ui.input({ key: 'field:env-other', text: 'Staging', kind: 'change' })
-  await ui.press({ key: 'save-config' })
-  expect(saved(seen).repos[0].queries[0].env).toBe('Staging')
-})
-
-test('each Config section is a card with its heading', async ($, on) => {
+test('each Config section is a card with its heading; repositories are edited in the file, not here', async ($, on) => {
   const { ui } = await mounted($, on, RESULT, CONFIG, EDITABLE)
-  for (const card of ['file', 'watch', 'envs', 'prs', 'notify', 'schedule', 'repos'])
+  for (const card of ['file', 'watch', 'envs', 'prs', 'notify', 'schedule'])
     expect((await ui.findAll({ key: `card:${card}` }))[0].props.borderStyle).toBe('round')
-})
-
-test('repository actions are real buttons: adding is the main one, deleting reads in red', async ($, on) => {
-  const { ui } = await mounted($, on, RESULT, CONFIG, EDITABLE)
-  await ui.press({ key: 'repo:repos.0' })
-  const props = async (key: string) => (await ui.findAll({ key }))[0].props
-  expect([(await props('add:repos.0.queries')).variant, (await props('edit:repos.0')).variant, (await props('delete:repos.0')).variant])
-    .toEqual(['primary', 'secondary', 'secondary'])
-  expect(JSON.stringify((await ui.findAll({ key: 'delete:repos.0' }))[0])).toContain('"color":"error"')
+  expect(await ui.find({ key: 'card:repos' })).toBeUndefined()
 })
 
 test('environments grouped in the config are one choice in Watch, covering each env they name', async ($, on) => {
@@ -801,43 +1063,6 @@ test('environments grouped in the config are one choice in Watch, covering each 
 const GROUPED = { ...EDITABLE, environments: { Production: ['Production', 'Canary'], Testing: ['Testing'] }, repos: [{ repo: 'acme/api', name: 'API', queries: [
   EDITABLE.repos[0]!.queries[0]!, { ...EDITABLE.repos[0]!.queries[0]!, env: 'Canary' }] }] }
 
-test('the query form lists the Environments section, each env under its group, and keeps the env it saves', async ($, on) => {
-  const { ui, seen } = await mounted($, on, RESULT, CONFIG, GROUPED)
-  await ui.press({ key: 'repo:repos.0' })
-  await ui.press({ key: 'edit:repos.0.queries.1' })
-  const env = (await ui.findAll({ key: 'field:env' }))[0].props
-  expect(env.options.map((o: any) => o.label)).toEqual(['Production', 'Production · Canary', 'Testing', 'Other…'])
-  expect(env.value).toBe('Canary')
-  await ui.press({ key: 'save-config' })
-  expect(saved(seen).repos[0].queries[1].env).toBe('Canary')
-})
-
-test('an environment typed after Other… joins the group picked for it', async ($, on) => {
-  const { ui, seen } = await mounted($, on, RESULT, CONFIG, GROUPED)
-  await ui.press({ key: 'repo:repos.0' })
-  await ui.press({ key: 'edit:repos.0.queries.0' })
-  await ui.select({ key: 'field:env', value: 'other' })
-  expect((await ui.findAll({ key: 'field:env-group' }))[0].props.options.map((o: any) => o.label)).toEqual(['No group', 'Production', 'Testing'])
-  await ui.input({ key: 'field:env-other', text: 'Shadow production', kind: 'change' })
-  await ui.select({ key: 'field:env-group', value: 'Production' })
-  await ui.press({ key: 'form-save' })
-  await ui.press({ key: 'save-config' })
-  expect(saved(seen).repos[0].queries[0].env).toBe('Shadow production')
-  expect(saved(seen).environments.Production).toEqual(['Production', 'Canary', 'Shadow production'])
-})
-
-test('a new environment from Other… still joins its group when the Environments card was edited too', async ($, on) => {
-  const { ui, seen } = await mounted($, on, RESULT, CONFIG, GROUPED)
-  await ui.input({ key: 'env-members:1', text: 'Testing, Preview', kind: 'change' })
-  await ui.press({ key: 'repo:repos.0' })
-  await ui.press({ key: 'edit:repos.0.queries.0' })
-  await ui.select({ key: 'field:env', value: 'other' })
-  await ui.input({ key: 'field:env-other', text: 'Shadow production', kind: 'change' })
-  await ui.select({ key: 'field:env-group', value: 'Production' })
-  await ui.press({ key: 'save-config' })
-  expect(saved(seen).environments).toEqual({ Production: ['Production', 'Canary', 'Shadow production'], Testing: ['Testing', 'Preview'] })
-})
-
 test('Config counts environments as the Environments section lists them', async ($, on) => {
   const { ui } = await mounted($, on, RESULT, CONFIG, GROUPED)
   expect(await ui.find({ key: 'config-counts', text: /· 2 environments/ })).toBeDefined()
@@ -849,8 +1074,21 @@ test('Watch filters by the Environments section: a group, then each env no group
   expect((await ui.findAll({ key: 'envs' }))[0].props.options.map((o: any) => o.label)).toEqual(['All environments', 'Production', 'Testing', 'Staging'])
 })
 
-test('the Environments card edits each group as a name and a comma-separated list', async ($, on) => {
-  const { ui, seen } = await mounted($, on, RESULT, CONFIG, { ...EDITABLE, environments: { Production: ['Production', 'Canary'] } })
+test('in a narrow terminal an environment group puts its members on a line of their own', async ($, on) => {
+  await mounted($, on, RESULT, CONFIG, { ...EDITABLE, environments: { Production: ['Production', 'Legacy production'] } })
+  const ui = await $.ui.mount({ ...CONFIG, surface: 'terminal', props: { ...CONFIG.props, bodyColumns: 50 } } as any)
+  expect((await ui.findAll({ key: 'env-row:0' }))[0].props.flexDirection).toBe('column')
+})
+
+test('a Config card\'s icon is not written out as a word in the terminal', async ($, on) => {
+  await mounted($, on, RESULT, CONFIG, EDITABLE)
+  const ui = await $.ui.mount({ ...CONFIG, surface: 'terminal' } as any)
+  expect(await ui.find({ key: 'h:prs', text: /^Pull requests/ })).toBeDefined()
+})
+
+test('in the terminal, the Environments card edits each group as a name and a comma-separated list', async ($, on) => {
+  const { seen } = await mounted($, on, RESULT, CONFIG, { ...EDITABLE, environments: { Production: ['Production', 'Canary'] } })
+  const ui = await $.ui.mount({ ...CONFIG, surface: 'terminal' } as any)
   const value = async (key: string) => (await ui.findAll({ key }))[0].props.value
   expect([await value('env-group:0'), await value('env-members:0')]).toEqual(['Production', 'Production, Canary'])
   await ui.input({ key: 'env-members:0', text: 'Production, Canary, Shadow', kind: 'change' })
@@ -863,24 +1101,6 @@ test('the Environments card edits each group as a name and a comma-separated lis
   await ui.press({ key: 'env-remove:0' })
   await ui.press({ key: 'save-config' })
   expect('environments' in saved(seen)).toBe(false)
-})
-
-test('the filter narrows the repositories by name or repo', async ($, on) => {
-  const config = { ...EDITABLE, repos: [...EDITABLE.repos, { repo: 'acme/worker', name: 'Worker', queries: [] }] }
-  const { ui } = await mounted($, on, RESULT, CONFIG, config)
-  await ui.input({ key: 'repo-filter', text: 'work', kind: 'change' })
-  expect(await ui.find({ key: 'repo:repos.0' })).toBeUndefined()
-  expect(await ui.find({ key: 'repo:repos.1' })).toBeDefined()
-})
-
-test('a new repository is added from its form', async ($, on) => {
-  const { ui, seen } = await mounted($, on, RESULT, CONFIG, EDITABLE)
-  await ui.press({ key: 'add:repos' })
-  await ui.input({ key: 'field:repo', text: 'acme/worker', kind: 'change' })
-  await ui.input({ key: 'field:name', text: 'Worker', kind: 'change' })
-  await ui.press({ key: 'form-save' })
-  await ui.press({ key: 'save-config' })
-  expect(saved(seen).repos[1]).toEqual({ repo: 'acme/worker', name: 'Worker', queries: [] })
 })
 
 test('each repository card is headed by the repository name and its count', async ($, on) => {
@@ -900,7 +1120,7 @@ test('in a narrow desktop pane a pull request puts its title first, then who, wh
   const { ui } = await mounted($, on, RESULT, { ...PRS, props: { ...PRS.props, bodyColumns: 40 } })
   const row = (await ui.findAll({ key: 'pr:acme/checkout-api#12' }))[0]
   expect(row.props.flexDirection).toBe('column')
-  expect(await ui.find({ key: 'pr:acme/checkout-api#12', text: /^#12Retry failed orderssam· 2h$/ })).toBeDefined()
+  expect(await ui.find({ key: 'pr:acme/checkout-api#12', text: /^Retry failed orders#12sam.*Waiting on you$/ })).toBeDefined()
   const alts = (await ui.findAll({ type: 'Svg' })).map((i: any) => i.props.alt)
   expect(alts).toEqual(expect.arrayContaining(['CI failing', 'lee: approved', 'max: pending']))
 })

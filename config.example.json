@@ -13,6 +13,10 @@
     "watch": true,
     "pull_requests": true
   },
+  "investigate": {
+    "prompt": "Investigate {{name}} ({{repo}}) in {{env}}, from {{from}} to {{to}}.\n{{problems}}\nQuery Datadog with pup first. Do not write tests.",
+    "problem": "- {{priority}} {{service}}: {{label}} is {{value}} ({{alert}}). {{source}} query `{{query}}`. Datadog: {{link}}"
+  },
   "repos": [
     {
       "repo": "acme/checkout-api",
@@ -50,6 +54,9 @@
           "compute": "percentile(@duration, 95)",
           "alert": {
             "above": 1000000000
+          },
+          "investigate": {
+            "prompt": "{{problems}}\nFind the slowest endpoint in the traces before reading code."
           }
         },
         {

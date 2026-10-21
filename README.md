@@ -56,16 +56,17 @@ When a tool is missing or signed out, the pane says what to do.
 
 ### Watch
 
-![Watch: one card per repository and environment, with Investigate on each](assets/screens/watch.svg)
+![Watch: one card per repository and environment; each query with its last runs, since when, and which way it moves](assets/screens/watch.svg)
 
 - Each card is one repository in one environment, such as `Checkout · Production`. Its rows are grouped by service.
-- A row is a query that crossed its alert line: priority, label, value and the line it crossed.
+- A row is a query that crossed its alert line: priority, label and value, with its last 12 runs as a small chart, since when it has been over, and whether it went up or down since the last run. A query that wasn't over in the last run says new.
 - The value links to the query in Datadog, pinned to the window that was checked.
 - The most urgent card comes first.
 - Dropdowns filter by priority, repository and environment.
-- The window dropdown checks a different window at once. Scheduled runs keep the config's window.
+- The window dropdown in the header checks a different window at once. Scheduled runs keep the config's window. A row's chart only compares runs of the same window.
+- Narrow panes keep one line per query and give the chart a line of its own under it.
 - Each row can turn its own notifications off and on.
-- **Investigate** sends a card's problems to Claude.
+- **Investigate** opens a new Claude session in the same folder with one query's problem: a desktop Code session from the desktop app, a Terminal window from the terminal (macOS).
 
 ### History
 
@@ -76,7 +77,7 @@ When a tool is missing or signed out, the pane says what to do.
 
 ### Pull requests
 
-![Pull requests: grouped by repository, with CI status and reviews](assets/screens/pull-requests.svg)
+![Pull requests: what needs you first, each saying who it waits on, with size, idle time, CI and reviews](assets/screens/pull-requests.svg)
 
 - Every pull request on your repositories, by any author.
 - Filter by Open, Merged or Closed, over a span of up to a month.
@@ -85,14 +86,16 @@ When a tool is missing or signed out, the pane says what to do.
 
 ### Config
 
-![Config: settings, schedule and repositories in one form](assets/screens/config.svg)
+![Config: the quick settings and the schedule](assets/screens/config.svg)
 
-- Edits the whole config in a form: settings, panes, notifications, repositories and queries.
+- Quick settings: Datadog site, window, history, environment groups, bots, panes and notifications.
+- Environment groups and bots are chips on the desktop: × takes one out, **+ add** adds one.
+- Repositories and queries live in `config.json`: **Open in editor** opens it, and its `$schema` gives your editor checks and completion. Or ask Claude to change them.
 - **Save changes** checks the config against the schema first and keeps the old file as `config.json.bak`.
 - **Discard** drops your changes. **Reload** reads a config edited by hand.
-- Schedule: a frequency with **Work hours only**, or a cron line. Set it for all queries or for one.
+- Schedule: a frequency with **Use work hours**, or a cron line. Set it for all queries or for one.
 - Pause and resume scheduled runs. An installed schedule is updated to match.
-- **Mute** silences every notification, scheduled ones included, until you unmute.
+- **Mute all** silences every notification, scheduled ones included, until you unmute.
 
 ## Config
 
@@ -141,6 +144,7 @@ That entry reads `Checkout › API: Production - Errors`. Pull requests show onc
 | `compute` | For logs and traces. Default `count`, for example `percentile(@duration, 95)` |
 | `reduce` | For metrics. Default `avg`; also `sum`, `max`, `min`, `last` |
 | `notify` | `false` keeps the entry in the pane only |
+| `investigate` | Optional `prompt` and `problem` templates for this query's Investigate. Each one overrides the general one in [Investigate prompt](#investigate-prompt); one left out uses the general one. |
 
 Top-level fields:
 
@@ -156,8 +160,42 @@ Top-level fields:
 | `historyDays` | How many days of runs to keep. 30 by default. |
 | `bots` | The GitHub usernames that **Hide bots** hides. `["dependabot"]` by default. |
 | `notify` | `{ "watch": true, "pull_requests": true }`. Sends one desktop notification for each new entry over its line, each open pull request whose CI turns red, and each time `pup` or `gh` needs you. It works from the schedule with Claude Code closed. |
+| `investigate` | `{ "session": "current" }` investigates in the session you are in instead of a new one. `{ "skill": "triage" }` runs your own skill with the problem, as `/triage <problem>`. `prompt` and `problem` set the message it sends. See [Investigate prompt](#investigate-prompt). |
 
 [`config.schema.json`](config.schema.json) describes all of it. The checker refuses a config that breaks the schema and says where, so an unknown field, a missing label or a priority of 0 is caught before anything runs. `python3 bin/on_my_watch.py validate` checks yours. Point `$schema` at the file and your editor checks it as you type. See [`config.example.json`](config.example.json) for a full example.
+
+### Investigate prompt
+
+Investigate sends Claude a message about the problems it was pressed on. `investigate.prompt` sets the whole message. `investigate.problem` sets one line, which is repeated once per problem into `{{problems}}`. Each template left out sends today's text.
+
+```json
+"investigate": {
+  "prompt": "Investigate {{name}} ({{repo}}) in {{env}}, from {{from}} to {{to}}.\n{{problems}}\nQuery Datadog with pup first. Do not write tests.",
+  "problem": "- {{priority}} {{service}}: {{label}} is {{value}} ({{alert}}). {{source}} query `{{query}}`. Datadog: {{link}}"
+}
+```
+
+A query can have its own `investigate` with `prompt`, `problem` or both. Each one it sets replaces the general one for that query's problem. The one it leaves out comes from the general `investigate`.
+
+| Variable | In | Value |
+|---|---|---|
+| `{{name}}` | both | The repository's name from the config, such as Checkout |
+| `{{repo}}` | both | The repository, as `owner/name` |
+| `{{env}}` | both | The query's `env` |
+| `{{window}}` | `prompt` | The config's `window`, such as `1h` |
+| `{{checkedAt}}` | `prompt` | When the check ran |
+| `{{from}}`, `{{to}}` | `prompt` | The start and end of the window the check counted |
+| `{{problems}}` | `prompt` | Every problem line, one per line |
+| `{{priority}}` | `problem` | `P1`, `P2` or `P3` |
+| `{{service}}` | `problem` | The query's `service` |
+| `{{label}}` | `problem` | The query's `label` |
+| `{{value}}` | `problem` | The number the check found, such as `666` |
+| `{{alert}}` | `problem` | The alert line it crossed, such as `above 19` |
+| `{{source}}` | `problem` | `logs`, `traces` or `metrics` |
+| `{{query}}` | `problem` | The query, as written in the config |
+| `{{link}}` | `problem` | The query in Datadog, opened on the checked window |
+
+In `prompt`, `{{name}}`, `{{repo}}` and `{{env}}` are the first problem's. A variable with no value is filled with nothing. A name that is not in the table, such as `{{lnk}}`, stays as written, so a typo shows in the message.
 
 ## Files
 

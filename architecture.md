@@ -31,7 +31,7 @@ A config that breaks the schema stops at step 2, and the pane says where it brea
 
 Checks, panes, notifications and the config form never call Claude. Only two things use your tokens:
 
-- **Investigate** sends one problem, with its query and Datadog link, to Claude as a prompt.
+- **Investigate** sends one query's problem, with its query and Datadog link, to Claude: in a new session by default, or in the current one, through a skill if the config names one, and in the words of its prompt templates if it sets them.
 - **Asking Claude** for help with the config is a normal conversation.
 
 ## Set it up with Claude

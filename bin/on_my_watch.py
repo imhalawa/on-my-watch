@@ -34,10 +34,13 @@ REDUCERS = {
 # Every PR a search finds, page by page. 50 a page: at 100, GitHub's answer timed out (HTTP 502) across 14 repos.
 # 100 is the most GitHub allows for reviews and review requests on one PR.
 SEARCH = '''query($q: String!, $endCursor: String) {
+  viewer { login }
   search(query: $q, type: ISSUE, first: 50, after: $endCursor) {
     pageInfo { hasNextPage endCursor }
     nodes { ... on PullRequest {
       number title url state isDraft createdAt updatedAt closedAt reviewDecision
+      changedFiles additions deletions mergeable mergeStateStatus
+      reviewThreads(first: 100) { nodes { isResolved } }
       repository { nameWithOwner }
       author { login __typename }
       commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
@@ -351,12 +354,12 @@ def pull_requests(services, run_gh, setup, avatars, closed_since):
     so nothing is cut off at a count. Reviewers come with their review; their pictures' addresses go into avatars."""
     repos = {repo['repo']: repo['name'] for repo in services if not repo.get('watch_only')}
     if not repos:
-        return [], []
+        return [], [], None
     # GitHub's search takes about 8 s a call whatever it finds, and a search's pages come one after another: small groups
     # of repos, all searched at once, finish in about the time of one call.
     names = list(repos)
     scopes = [' '.join(f'repo:{repo}' for repo in names[at:at + REPOS_PER_SEARCH]) for at in range(0, len(names), REPOS_PER_SEARCH)]
-    found, errors = [], []
+    found, errors, viewer = [], [], None
     searches = [f'is:pr is:open {scope}' for scope in scopes] + [f'is:pr is:closed closed:>={closed_since} {scope}' for scope in scopes]
 
     def search(q):
@@ -385,6 +388,7 @@ def pull_requests(services, run_gh, setup, avatars, closed_since):
             if error not in errors:
                 errors.append(error)
             continue
+        viewer = viewer or next((page['data'].get('viewer', {}).get('login') for page in pages), None)
         for pr in (pr for page in pages for pr in page['data']['search']['nodes'] if pr):
             repo = pr['repository']['nameWithOwner']
             if repo not in repos:
@@ -410,8 +414,12 @@ def pull_requests(services, run_gh, setup, avatars, closed_since):
                           'draft': pr['isDraft'], 'review': pr.get('reviewDecision'), 'state': pr['state'],
                           'ci': ci(commits[0]['commit']['statusCheckRollup']) if commits else None,
                           'createdAt': pr['createdAt'], 'updatedAt': pr['updatedAt'], 'closedAt': pr.get('closedAt'),
-                          'reviewers': reviewers, 'url': pr['url']})
-    return sorted(found, key=lambda pr: pr['closedAt'] or pr['updatedAt'], reverse=True), errors
+                          'reviewers': reviewers, 'url': pr['url'],
+                          # What a review needs to know: how big it is, whether it can merge, what talk is still open.
+                          'files': pr.get('changedFiles'), 'additions': pr.get('additions'), 'deletions': pr.get('deletions'),
+                          'conflicts': pr.get('mergeable') == 'CONFLICTING', 'behind': pr.get('mergeStateStatus') == 'BEHIND',
+                          'threads': sum(not t['isResolved'] for t in (pr.get('reviewThreads') or {}).get('nodes', []))})
+    return sorted(found, key=lambda pr: pr['closedAt'] or pr['updatedAt'], reverse=True), errors, viewer
 
 
 def watch(config, run_pup, before=None, due=None):
@@ -419,7 +427,7 @@ def watch(config, run_pup, before=None, due=None):
     window = config.get('window', '1h')
     end_ms = int(time.time()) * 1000  # whole seconds, so the stored span and the links' from_ts/to_ts agree
     span_ms = (end_ms - seconds(window) * 1000, end_ms)
-    problems, errors, attempted, setup = [], [], 0, []
+    problems, errors, attempted, setup, counts = [], [], 0, [], {}
     # A scheduled run checks the queries due now; the others keep what they found last time.
     everything = queries_of(config)
     entries = [entry for entry in everything if not due or due(entry[3])]
@@ -470,10 +478,11 @@ def watch(config, run_pup, before=None, due=None):
         except Exception as error:  # one query failing still leaves the others' results
             errors.append(f"{name} › {service} / {query['label']}: {error}")
             continue
+        counts[entry_key({'name': name, 'service': service, 'env': query['env'], 'label': query['label']})] = now  # under the line too: trends need every run
         if alerts(rule, now):
             rank, shown = urgency(config, query['priority'])
             problems.append({'name': name, 'repo': repo, 'service': service, 'env': query['env'], 'label': query['label'],
-                             'priority': rank, 'priorityName': shown, 'source': query['source'], 'value': display(query, now),
+                             'priority': rank, 'priorityName': shown, 'source': query['source'], 'value': display(query, now), 'raw': now, 'threshold': rule.get('above'),
                              'alert': describe(query), 'link': link(config['site'], query, span_ms), 'query': query['query'],
                              # false keeps the entry in the pane only; left out, it notifies
                              'notify': query.get('notify', True) is not False})
@@ -492,6 +501,7 @@ def watch(config, run_pup, before=None, due=None):
         'status': 'failed' if setup or (attempted and len(errors) >= attempted) else 'ok',
         'errors': errors,
         'problems': problems,
+        'counts': counts,
     }, setup
 
 
@@ -508,7 +518,7 @@ def pull_requests_part(config, run_gh, before=None, due=None):
     repos = {repo['repo'] for repo in config['repos'] if not repo.get('watch_only')}
     kept = [pr for pr in (before or {}).get('pullRequests') or []
             if pr.get('state', 'OPEN') != 'OPEN' and pr.get('closedAt') and when(pr['closedAt']) >= cutoff and pr['repo'] in repos]
-    found, errors = pull_requests(config['repos'], run_gh, setup, avatars, since.isoformat(timespec='seconds'))
+    found, errors, viewer = pull_requests(config['repos'], run_gh, setup, avatars, since.isoformat(timespec='seconds'))
     if setup:  # gh couldn't run: keep the last pull requests, or every red CI would notify again on the next good run
         return {'prsCheckedAt': (before or {}).get('prsCheckedAt'), 'closedThrough': last, 'pullRequests': (before or {}).get('pullRequests') or [],
                 'prErrors': errors, 'avatarUrls': {}}, setup
@@ -521,7 +531,7 @@ def pull_requests_part(config, run_gh, before=None, due=None):
     # The next refresh asks for closed ones from here; after a failed search, from the last good one so none is skipped.
     closed_failed = any(error.startswith('pull requests (closed)') for error in errors) or setup
     return {'prsCheckedAt': now_iso(), 'closedThrough': last if closed_failed else stamp.isoformat(timespec='seconds'),
-            'pullRequests': found, 'prErrors': errors, 'avatarUrls': avatars}, setup
+            'pullRequests': found, 'prErrors': errors, 'avatarUrls': avatars, 'viewer': viewer or (before or {}).get('viewer')}, setup
 
 
 PARTS = {'watch': ('pup', watch), 'pull_requests': ('gh', pull_requests_part)}
@@ -787,10 +797,42 @@ def show(db_path, row_id):
     return json.loads(row[0]) if row else None
 
 
+TREND_RUNS = 12  # how many Watch runs an entry's trend looks back over
+
+
 def latest(db_path):
+    """The newest row, each entry with its trend over the last Watch runs that checked the same window: a 5m count
+    and a 1h count don't compare (a PR refresh is not a run)."""
+    newest, runs = None, []
     with contextlib.closing(connect(db_path)) as db:
-        row = db.execute('SELECT result FROM runs ORDER BY id DESC LIMIT 1').fetchone()
-    return json.loads(row[0]) if row else None
+        for (text,) in db.execute('SELECT result FROM runs ORDER BY id DESC'):
+            r = json.loads(text)
+            newest = newest or r
+            if (r.get('status') == 'ok' and r.get('window') == newest.get('window')
+                    and r.get('checkedAt') not in {run['checkedAt'] for run in runs}):
+                runs.append(r)
+            if len(runs) == TREND_RUNS:
+                break
+    if newest:
+        add_trends(newest['problems'], runs[::-1])
+    return newest
+
+
+def add_trends(problems, runs):
+    """Each entry's raw value per run, oldest first (None where it was under its line), since when it has been over
+    without a break, its value the run before, and whether that run didn't have it.
+    shortcut: since looks back TREND_RUNS runs at most; store it per entry if a longer streak must show its start."""
+    key = entry_key
+    found = [{key(p): p.get('raw') for p in run['problems']} for run in runs]
+    for problem in problems:
+        here = [key(problem) in run for run in found]
+        start = len(here)
+        while start and here[start - 1]:
+            start -= 1
+        # Every count where the run kept them all; older runs only kept those over the line.
+        values = [run.get('counts', {}).get(key(problem), seen.get(key(problem))) for run, seen in zip(runs, found)]
+        problem['trend'] = {'values': values, 'since': runs[start]['checkedAt'] if start < len(runs) else None,
+                            'previous': values[-2] if len(values) > 1 else None, 'isNew': len(here) < 2 or not here[-2]}
 
 
 def scheduled_now():

@@ -73,6 +73,9 @@ def node(repo, pr):
             'commits': {'nodes': [{'commit': {'statusCheckRollup': pr['ci'] and {'state': pr['ci']}}}]} if 'ci' in pr else {'nodes': []},
             'latestOpinionatedReviews': {'nodes': [{'state': state, 'author': {'login': who, 'avatarUrl': f'https://a/{who}'}}
                                                    for who, state in pr.get('reviews', {}).items()]},
+            'changedFiles': pr.get('files', 1), 'additions': pr.get('additions', 0), 'deletions': pr.get('deletions', 0),
+            'mergeable': pr.get('mergeable', 'MERGEABLE'), 'mergeStateStatus': pr.get('mergeState', 'CLEAN'),
+            'reviewThreads': {'nodes': [{'isResolved': done} for done in pr.get('threads', [])]},
             'reviewRequests': {'nodes': [{'requestedReviewer': {'login': who, 'avatarUrl': f'https://a/{who}'}}
                                          for who in pr.get('requested', [])]
                                + [{'requestedReviewer': {'slug': team, 'avatarUrl': f'https://a/t/{team}'}}
@@ -88,7 +91,7 @@ def fake_gh(prs, closed=None):
         # Two to a page, so tests walk the pages as GitHub's search hands them out.
         at = int(next((a[10:] for a in args if a.startswith('endCursor=')), '0'))
         more = at + 2 < len(nodes)
-        return {'data': {'search': {'pageInfo': {'hasNextPage': more, 'endCursor': str(at + 2) if more else None}, 'nodes': nodes[at:at + 2]}}}
+        return {'data': {'viewer': {'login': 'me'}, 'search': {'pageInfo': {'hasNextPage': more, 'endCursor': str(at + 2) if more else None}, 'nodes': nodes[at:at + 2]}}}
     return run_gh
 
 
@@ -298,7 +301,19 @@ class Run(unittest.TestCase):
         self.assertEqual(result['pullRequests'], [{
             'name': 'API', 'repo': 'acme/checkout-api', 'number': 12, 'title': 'Retry failed orders',
             'author': 'sam', 'bot': False, 'draft': False, 'review': 'REVIEW_REQUIRED', 'state': 'OPEN', 'ci': None, 'createdAt': '2026-10-15T09:00:00Z',
-            'updatedAt': '2026-10-16T10:00:00Z', 'closedAt': None, 'reviewers': [], 'url': 'https://github.com/acme/checkout-api/pull/12'}])
+            'updatedAt': '2026-10-16T10:00:00Z', 'closedAt': None, 'reviewers': [], 'url': 'https://github.com/acme/checkout-api/pull/12',
+            'files': 1, 'additions': 0, 'deletions': 0, 'conflicts': False, 'behind': False, 'threads': 0}])
+
+    def test_a_pull_request_says_its_size_whether_it_can_merge_its_open_threads_and_who_you_are(self):
+        prs = {'acme/checkout-api': [{'number': 12, 'title': 'Retry failed orders', 'author': {'login': 'sam'}, 'createdAt': '2026-10-15T09:00:00Z',
+                                      'url': 'https://github.com/acme/checkout-api/pull/12', 'files': 14, 'additions': 610, 'deletions': 288,
+                                      'mergeable': 'CONFLICTING', 'mergeState': 'BEHIND', 'threads': [False, True, False]}]}
+        with tempfile.TemporaryDirectory() as home:
+            result = self.run_once(home, gh=fake_gh(prs))
+        [pr] = result['pullRequests']
+        self.assertEqual({k: pr[k] for k in ('files', 'additions', 'deletions', 'conflicts', 'behind', 'threads')},
+                         {'files': 14, 'additions': 610, 'deletions': 288, 'conflicts': True, 'behind': True, 'threads': 2})
+        self.assertEqual(result['viewer'], 'me')
 
     def test_closed_and_merged_pull_requests_come_with_their_state(self):
         closed = {'acme/checkout-api': [
@@ -384,10 +399,49 @@ class Run(unittest.TestCase):
             self.assertIsNone(w.latest(db))
             first = self.run_once(home)
             second = self.run_once(home, pup=FakePup(now=total(99)))
-            self.assertEqual(w.latest(db), second)
+            newest = w.latest(db)
+            for p in newest['problems']:
+                p.pop('trend')  # worked out on reading, not stored
+            self.assertEqual(newest, second)
             with contextlib.closing(sqlite3.connect(db)) as rows:
                 self.assertEqual(rows.execute('SELECT COUNT(*) FROM runs').fetchone()[0], 2)
             self.assertNotEqual(first, second)
+
+    def test_latest_gives_each_entry_its_trend_over_the_last_runs(self):
+        start = datetime.datetime(2026, 10, 21, 9, 0, tzinfo=datetime.timezone.utc)
+        with tempfile.TemporaryDirectory() as home:
+            db = os.path.join(home, 'history.db')
+            for minutes, count in enumerate([72, 0, 30, 40]):  # 0 is under the line: the entry is gone that run
+                stamp = (start + datetime.timedelta(minutes=minutes)).isoformat(timespec='seconds')
+                with mock.patch.object(w, 'now_iso', return_value=stamp):
+                    self.run_once(home, pup=FakePup(now=total(count)))
+            [problem] = w.latest(db)['problems']
+        self.assertEqual((problem['raw'], problem['threshold']), (40, 20))
+        # Every run keeps every count, under the line too, so the trend has no gaps.
+        self.assertEqual(problem['trend'], {'values': [72, 0, 30, 40], 'since': '2026-10-21T09:02:00+00:00',
+                                            'previous': 30, 'isNew': False})
+
+    def test_a_trend_compares_only_runs_that_counted_the_same_window(self):
+        start = datetime.datetime(2026, 10, 21, 9, 0, tzinfo=datetime.timezone.utc)
+        with tempfile.TemporaryDirectory() as home:
+            db = os.path.join(home, 'history.db')
+            for minutes, (window, count) in enumerate([('1h', 72), ('5m', 900), ('1h', 80)]):
+                stamp = (start + datetime.timedelta(minutes=minutes)).isoformat(timespec='seconds')
+                with mock.patch.object(w, 'now_iso', return_value=stamp):
+                    self.run_once(home, config={**CONFIG, 'window': window}, pup=FakePup(now=total(count)))
+            [problem] = w.latest(db)['problems']
+        self.assertEqual(problem['trend'], {'values': [72, 80], 'since': '2026-10-21T09:00:00+00:00',
+                                            'previous': 72, 'isNew': False})
+
+    def test_an_entry_missing_from_the_run_before_is_new(self):
+        with tempfile.TemporaryDirectory() as home:
+            db = os.path.join(home, 'history.db')
+            self.run_once(home, pup=FakePup(now=total(0)))
+            later = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=1)).isoformat(timespec='seconds')
+            with mock.patch.object(w, 'now_iso', return_value=later):
+                self.run_once(home, pup=FakePup(now=total(72)))
+            [problem] = w.latest(db)['problems']
+        self.assertEqual(problem['trend'], {'values': [0, 72], 'since': later, 'previous': 0, 'isNew': True})
 
 
 class Parts(unittest.TestCase):

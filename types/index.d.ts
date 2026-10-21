@@ -24,9 +24,32 @@ export type Problem = {
   query: string
   /** The config's notify for this query; false keeps it in the pane only. */
   notify?: boolean
+  /** The count as measured; runs stored before it was kept have none. */
+  raw?: number | null
+  /** The alert line as a number, when the query alerts above one. */
+  threshold?: number | null
+  /** The last runs, worked out when the newest is read. */
+  trend?: {
+    /** Oldest first; null where the entry was under its line. */
+    values: (number | null)[]
+    /** When its current unbroken stretch over the line began. */
+    since: string | null
+    previous: number | null
+    /** The run before didn't have it. */
+    isNew: boolean
+  }
 }
 
 export type PullRequest = {
+  /** Its size: files changed, lines added and taken out. Older runs have none. */
+  files?: number | null
+  additions?: number | null
+  deletions?: number | null
+  /** It conflicts with its base; behind it. */
+  conflicts?: boolean
+  behind?: boolean
+  /** Review threads not yet resolved. */
+  threads?: number
   /** The names of the entries whose repo this is. */
   name?: string
   /** Older runs only, before entries had names. */
@@ -67,6 +90,8 @@ export type Result = {
   pullRequests: PullRequest[]
   /** When pull requests were last fetched; null until they have been. */
   prsCheckedAt: string | null
+  /** Who the GitHub CLI is signed in as: whose review a PR waits on. */
+  viewer?: string | null
   prErrors: string[]
   /** What the user must do first: install or sign in to pup or gh. */
   setup: { tool: 'pup' | 'gh'; need?: 'install' | 'login'; fix: string }[]
@@ -87,8 +112,6 @@ declare module 'claude-code' {
       runningSince: string | null; span: string; hideBots: boolean; prState: 'open' | 'merged' | 'closed'
       /** The page of pull requests shown, from 1. */
       prPage: number
-      /** The page of the open repository's queries shown in Config, from 1. */
-      queriesPage: number
       priorityFilter: string
       nameFilter: string
       envFilter: string
@@ -104,16 +127,8 @@ declare module 'claude-code' {
       configProblems: string[]
       /** Why the last change was refused; empty when it saved. */
       configError: string
-      /** The repository or query form open: its dotted path (`+` adds one) and the text in its fields. */
-      editing: { path: string; kind: 'repo' | 'query'; draft: Record<string, string> } | null
-      /** The path whose Delete waits for Yes. */
-      confirming: string
-      /** The repository shown open, by path. */
-      openRepo: string
       /** Settings typed but not saved yet, by path. */
       settingsDraft: Record<string, string> | null
-      /** What the Repositories filter holds. */
-      repoFilter: string
       /** The environment groups as typed, [name, comma-separated members] row by row; null until one changes. */
       envRows: [string, string][] | null
       /** The environment group being added. */
