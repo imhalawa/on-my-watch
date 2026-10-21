@@ -97,6 +97,24 @@ When a tool is missing or signed out, the pane says what to do.
 - Pause and resume scheduled runs. An installed schedule is updated to match.
 - **Mute all** silences every notification, scheduled ones included, until you unmute.
 
+### In the terminal
+
+![The Watch pane in a dark terminal, docked beside Claude: block-character charts, words for marks, a letter per control](assets/screens/terminal-watch.svg)
+
+![The Pull requests pane in a dark terminal: what needs you first, who each waits on, size and idle time](assets/screens/terminal-pull-requests.svg)
+
+- The same panes, drawn in text: charts in block characters, priorities and marks as words.
+- Each control has a letter to press, shown before it: `r` refreshes, `h` opens History.
+- Values and titles open in your browser when pressed, so a terminal without links never prints a long URL.
+
+### Notifications
+
+![Desktop notifications from on-my-watch, each with the lighthouse icon](assets/screens/notifications.svg)
+
+- One for each new entry over its line, each open pull request whose CI turns red, and each time `pup` or `gh` needs you.
+- Sent by the schedule, whether Claude Code is open or not, on macOS, Linux and Windows.
+- **Mute all** in Config silences them; each Watch row's bell turns its own off.
+
 ## Config
 
 The config is a list of GitHub repositories. Each one holds the queries that watch its services:
