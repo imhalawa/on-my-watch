@@ -6,9 +6,6 @@
 
 on-my-watch is a [Claude Code mod](https://code.claude.com/docs/en/plugins/mods/overview): a notification pane for your Datadog queries and GitHub pull requests. It runs your queries, compares each value with the line you set, and tells you when one crosses it.
 
-> [!WARNING]
-> on-my-watch is still under development, and things might break. If something goes wrong or feels off, please [open an issue](https://github.com/imhalawa/on-my-watch/issues/new/choose). Every report helps. See [CONTRIBUTING.md](CONTRIBUTING.md) to help fix it.
-
 ## Features
 
 - Alerts on your own Datadog queries over logs, traces and metrics.
