@@ -132,14 +132,17 @@ async function mounted($: any, on: any, latest: unknown = RESULT, pane: any = PA
   return { seen, ui: await $.ui.mount(pane) }
 }
 
-test('the desktop app attaching opens a Watch pane, a Pull requests pane and a Config pane, Watch in front', async ($, on) => {
+test('a session starting or a surface attaching opens no pane; /watch opens Watch, Pull requests and Config, Watch in front', async ($, on) => {
   const { seen } = await mounted($, on)
+  expect(seen.opened).toEqual([])
+  await $.command.run({ command: 'watch' } as any)
   // Watch is opened again last, with focus: the last pane opened is the one shown.
   expect(seen.opened).toEqual(['on-my-watch', 'on-my-watch-prs', 'on-my-watch-config', 'on-my-watch'])
 })
 
 test('a pane turned off in the config does not open', async ($, on) => {
   const { seen } = await mounted($, on, RESULT, PANE, { panes: { pull_requests: false } })
+  await $.command.run({ command: 'watch' } as any)
   expect(seen.opened).toEqual(['on-my-watch', 'on-my-watch-config', 'on-my-watch'])
 })
 
