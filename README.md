@@ -45,9 +45,20 @@ When a tool is missing or signed out, the pane says what to do.
    /plugin marketplace add imhalawa/on-my-watch
    /plugin install on-my-watch@on-my-watch
    ```
-2. Run `/on-my-watch:configure` and answer its questions. It writes `~/.on-my-watch/config.json` for you. To write it by hand instead, copy [`config.example.json`](config.example.json) there.
-3. Run `/watch`, then press ↻ in each pane.
+2. Run `/on-my-watch:doctor` and answer its questions. It writes `~/.on-my-watch/config.json` for you. To write it by hand instead, copy [`config.example.json`](config.example.json) there.
+3. Run `/on-my-watch:watch` (or `/watch`) and `/on-my-watch:prs`, then press ↻ in each pane.
 4. Optional: run the checks on the config's schedule with `python3 <plugin folder>/bin/schedule.py install`. It uses launchd on macOS, your crontab on Linux and Task Scheduler on Windows. `uninstall` removes it.
+
+## Commands
+
+| Command | Does |
+|---|---|
+| `/on-my-watch:watch` (or `/watch`) | Opens the Watch pane only |
+| `/on-my-watch:prs` | Opens the Pull requests pane only |
+| `/on-my-watch:config` | Opens the Config pane only |
+| `/on-my-watch:doctor` | Sets up, edits and checks `~/.on-my-watch/config.json` with Claude. Replaces `/on-my-watch:configure`. |
+
+A pane stays open between sessions until you close it. A new session opens only the panes you left open.
 
 ## Panes
 
@@ -172,6 +183,8 @@ Top-level fields:
 | `repos` | The repositories and their queries, described above |
 | `environments` | Optional groups that Watch's filter shows as one, such as `{ "Production": ["Production", "Canary"] }`. Each query keeps its own `env`. Watch's filter, the query form's Environment list and the Config counts all use it. |
 | `panes` | `{ "watch": false }` or `{ "pull_requests": false }` turns a pane off |
+| `ranges` | The range each pane starts on, such as `{ "watch": "15m", "pull_requests": "today" }`. Watch starts on the config's `window` and Pull requests on `3d` by default. A pick in a pane holds until the session ends or this changes. |
+| `panesSchedule` | Optional cron line for when the open panes read the newest runs, such as `* 9-17 * * 1-5`. Every minute by default. `/watch` always reads them. |
 | `historyDays` | How many days of runs to keep. 30 by default. |
 | `bots` | The GitHub usernames that **Hide bots** hides. `["dependabot"]` by default. |
 | `notify` | `{ "watch": true, "pull_requests": true }`. Sends one desktop notification for each new entry over its line, each open pull request whose CI turns red, and each time `pup` or `gh` needs you. It works from the schedule with Claude Code closed. |

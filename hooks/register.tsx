@@ -8,7 +8,7 @@ const PANES = {
   watch: { id: 'on-my-watch', title: 'Watch' },
   pull_requests: { id: 'on-my-watch-prs', title: 'Pull requests' },
 } as const
-// Config and the schedule, for both parts: a pane of its own, always open beside the others.
+// Config and the schedule, for both parts: a pane of its own, opened by /on-my-watch:config.
 const CONFIG_PANE = { id: 'on-my-watch-config', title: 'Config' } as const
 // A desktop app can start with a short PATH; these are where pup and gh usually live on macOS and Linux.
 const TOOL_DIRS = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
@@ -556,6 +556,33 @@ async function load($: any) {
 // The pull request fetch the pictures in `avatars` were read after.
 let picturesFor: string | undefined
 
+// The config's `ranges` as last applied to the panes.
+let rangesFor: string | undefined
+
+// Whether one cron field, such as `*/15`, `9-17` or `1,3,5`, takes this value.
+function cronField(field: string, value: number, low: number, high: number) {
+  return field.split(',').some(part => {
+    const [range, by] = part.split('/')
+    const [from, to] = range === '*' ? [low, high] : range.includes('-') ? range.split('-').map(Number) : [Number(range), by ? high : Number(range)]
+    return value >= from && value <= to && (value - from) % Number(by ?? 1) === 0
+  })
+}
+// Whether a five-field cron line takes this minute. Sunday is 0 or 7; day of month and weekday, both set, take either.
+function cronMatches(cron: string, at: Date) {
+  const [minute, hour, date, month, weekday] = cron.trim().split(/\s+/)
+  const onDate = cronField(date, at.getDate(), 1, 31)
+  const onWeekday = cronField(weekday, at.getDay(), 0, 7) || (at.getDay() === 0 && cronField(weekday, 7, 0, 7))
+  const onDay = date === '*' || weekday === '*' ? onDate && onWeekday : onDate || onWeekday
+  return cronField(minute, at.getMinutes(), 0, 59) && cronField(hour, at.getHours(), 0, 23) && cronField(month, at.getMonth() + 1, 1, 12) && onDay
+}
+
+// Each minute: the config always, the newest runs only within `panesSchedule` when the config sets one.
+async function tick($: any) {
+  await readPanes($)
+  const every = ((await read($, configDoc)) as any)?.panesSchedule
+  if (typeof every !== 'string' || cronMatches(every, new Date(await $.clock.now()))) await load($)
+}
+
 // `panes` in ~/.on-my-watch/config.json; a pane left out is on.
 // Every environment the config knows, as [group, members]: the Environments section's groups in its order, then each
 // env the queries use that no group names, on its own. The Watch filter, the query form and the counts all read this.
@@ -573,6 +600,13 @@ async function readPanes($: any) {
     const config = JSON.parse(await $.fs.read(`${home}/.on-my-watch/config.json`))
     panes = config.panes ?? {}
     await update($, configDoc, () => config)
+    // The ranges the panes start on, set again only when the config changes them, so a pick in a pane holds till then.
+    const ranges = JSON.stringify(config.ranges ?? {})
+    if (ranges !== rangesFor) {
+      rangesFor = ranges
+      if (config.ranges?.pull_requests) await Promise.all([update($, span, () => config.ranges.pull_requests), update($, prPage, () => 1)])
+      if (typeof config.ranges?.watch === 'string') await update($, watchWindow, () => config.ranges.watch)
+    }
     // A refusal belongs to the file it was made against: a fresh read leaves it behind.
     await update($, configError, () => '')
     await update($, configReadAt, () => new Date().toISOString())
@@ -595,17 +629,47 @@ async function readPanes($: any) {
   return { watch: panes.watch !== false, pull_requests: panes.pull_requests !== false }
 }
 
-async function show($: any) {
+// The newest run and the config, so a pane draws them however it comes to open.
+async function ready($: any) {
+  await load($)
+  return readPanes($)
+}
+
+// The ids of the panes left open, kept between sessions: a command adds its pane, closing one takes it out, and a new
+// session or an attaching app opens those again. An unload is not the person closing it, so it keeps its place.
+const OPEN_KEY = 'openPanes'
+const ALL_PANES = [PANES.watch, PANES.pull_requests, CONFIG_PANE]
+// Watch and Pull requests only while the config keeps them on; Config always.
+const shown = (id: string, on: Record<Part, boolean>) => (id === PANES.watch.id ? on.watch : id === PANES.pull_requests.id ? on.pull_requests : true)
+
+async function remembered($: any): Promise<string[]> {
+  const ids = await $.store.get(OPEN_KEY)
+  return Array.isArray(ids) ? ids : []
+}
+
+async function forget($: any, id: string) {
+  await $.store.set(OPEN_KEY, (await remembered($)).filter(open => open !== id))
+}
+
+// One command, one pane: it opens in front, is remembered, and leaves the others as they are.
+async function openPane($: any, pane: (typeof ALL_PANES)[number]) {
   try {
-    await load($)
-    const on = await readPanes($)
-    for (const part of ['watch', 'pull_requests'] as const) if (on[part]) await $.ui.open(PANES[part])
-    await $.ui.open(CONFIG_PANE)
-    // The last pane opened is shown, and opening an open one only retitles it: focus brings Watch to the front.
-    if (on.watch) await $.ui.open({ ...PANES.watch, focus: true })
+    const on = await ready($)
+    if (!shown(pane.id, on)) return $.ui.toast(`on-my-watch: the ${pane.title} pane is turned off in the config`)
+    await $.ui.open({ ...pane, focus: true })
+    await $.store.set(OPEN_KEY, [...new Set([...(await remembered($)), pane.id])])
   } catch (error) {
     $.ui.toast(`on-my-watch: ${String(error)}`)
   }
+}
+
+// The panes left open last time, those the config still shows; none on a first run or once closed. Watch goes last,
+// the last pane opened being the one shown, so a reload that reopens them keeps Watch in front.
+async function reopen($: any) {
+  const on = await ready($)
+  const ids = await remembered($)
+  const up = new Set((await $.ui.panes()).map((p: any) => p.id))
+  for (const pane of [...ALL_PANES].reverse()) if (ids.includes(pane.id) && !up.has(pane.id) && shown(pane.id, on)) await $.ui.open(pane)
 }
 
 // Set only by a run this load of the module started. State outlives a reload but the run doesn't, so a `running`
@@ -980,25 +1044,40 @@ export const register: Register = on => {
     await $.command.register({ name: 'watch', description: 'Show your services and pull requests' })
     // State outlives a reload but the run that set this flag doesn't: left set, Refresh would never come back.
     await update($, running, () => null)
-    // Runs land in the database from launchd; read the newest while the session runs.
-    $.clock.every(60_000, () => load($))
-    if (e.surface || (await $.session.surfaces()).length > 0) await show($)
+    // Runs land in the database from launchd, and Claude edits the config: read both while the session runs.
+    $.clock.every(60_000, () => tick($))
+    await reopen($).catch(() => {})
 
     return next(e)
   })
 
   on('session.attach', async ($, e, next) => {
     const attached = await next(e)
-    await show($)
+    await reopen($).catch(() => {})
 
     return attached
   })
 
-  on('command.run', { command: 'watch' }, async $ => {
-    await show($)
+  // Closed by the person or by $.ui.close, a pane stays closed next time; an unload leaves it remembered.
+  on('ui.close', async ($, e, next) => {
+    const closed = await next(e)
+    if (e.origin.kind !== 'unload' && ALL_PANES.some(p => p.id === e.id)) await forget($, e.id)
 
-    return { text: 'On my watch opened.' }
+    return closed
   })
+
+  // Each pane has a commands/<name>.md, which is what the app's menu lists, as on-my-watch:<name>; the hook answers it.
+  // The registered /watch is the same as the first. Neither /prs nor /config is registered bare: /config is a built-in's.
+  const COMMANDS: [string, (typeof ALL_PANES)[number]][] = [
+    ['on-my-watch:watch', PANES.watch], ['watch', PANES.watch], ['on-my-watch:prs', PANES.pull_requests], ['on-my-watch:config', CONFIG_PANE],
+  ]
+  for (const [command, pane] of COMMANDS) {
+    on('command.run', { command }, async $ => {
+      await openPane($, pane)
+
+      return { text: `${pane.title} opened.` }
+    })
+  }
 
   on('ui.render', { component: 'Pane', requestId: PANES.watch.id }, async ($, e) => {
     const ui = $.ui.resolve(e)

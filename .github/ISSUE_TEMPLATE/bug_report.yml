@@ -38,7 +38,7 @@ body:
     id: pane
     attributes:
       label: Where
-      options: [Watch, Pull requests, Config, History, Scheduled runs, Notifications, configure skill, Other]
+      options: [Watch, Pull requests, Config, History, Scheduled runs, Notifications, doctor skill, Other]
   - type: input
     id: versions
     attributes:

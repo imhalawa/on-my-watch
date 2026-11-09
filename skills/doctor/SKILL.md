@@ -1,9 +1,9 @@
 ---
-name: configure
+name: doctor
 description: Use when the user wants to set up on-my-watch, or add, change or remove what it watches: repositories, Datadog queries, schedules, notifications and other settings in ~/.on-my-watch/config.json.
 ---
 
-# Configure on-my-watch
+# Doctor for on-my-watch
 
 The plugin root is two folders above this skill's base directory. It holds `config.schema.json`, `config.example.json` and `bin/on_my_watch.py`. The config lives in `~/.on-my-watch/config.json`.
 
@@ -24,7 +24,7 @@ The plugin root is two folders above this skill's base directory. It holds `conf
 
    On a first-time setup, first copy `config.example.json` to `~/.on-my-watch/config.json` (create the folder), then replace it the same way.
 6. If the engine refuses the config, it prints each field that breaks the schema. Fix those fields and save again.
-7. Tell the user to press **Reload** in the Config pane, or wait for the next run. If they want checks while Claude Code is closed, offer `python3 <plugin root>/bin/schedule.py install`.
+7. Tell the user to press **Reload** in the Config pane (`/on-my-watch:config` opens it), or wait for the next run. If they want checks while Claude Code is closed, offer `python3 <plugin root>/bin/schedule.py install`.
 
 ## Rules
 

@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 // What a desktop control's icon says: its Svg's alt, under the invisible button.
 const iconOf = async (ui: any, key: string) => (await ui.findAll({ key: `icon:${key}` }))[0]?.children[0].props.alt
@@ -59,15 +59,18 @@ const PRS = { ...PANE, requestId: 'on-my-watch-prs', props: { ...PANE.props, tit
 const CONFIG = { ...PANE, requestId: 'on-my-watch-config', props: { ...PANE.props, title: 'Config' } } as const
 
 // The engine beneath the mod: the checker process answering `latest` and `run`, the prompt, a desktop surface.
-function world(on: any, latest: unknown, config: unknown = {}, env: Record<string, string> = { HOME: '/home/me', PATH: '/usr/bin' }) {
-  const seen = { opened: [] as string[], runs: [] as string[][], envs: [] as any[], submitted: [] as string[], commands: [] as string[], refuse: [] as string[], muted: false, quiet: [] as string[], saved: [] as any[],
+function world(on: any, latest: unknown, config: unknown = {}, env: Record<string, string> = { HOME: '/home/me', PATH: '/usr/bin' }, store: Record<string, unknown> = {}, clock?: number) {
+  const seen = { opened: [] as string[], up: [] as string[], toasts: [] as string[], runs: [] as string[][], envs: [] as any[], submitted: [] as string[], commands: [] as string[], refuse: [] as string[], muted: false, quiet: [] as string[], saved: [] as any[], clock: undefined as any,
     schedule: { paused: null as string | null, schedule: '0 9-18 * * 1-5', next: '2026-10-19T19:00:00', own: [{ entry: 'API|Checkout|Production|Error logs', schedule: '*/15 9-18 * * 1-5' }] } }
+  mock.store(on, store)
   on('session.start', async (_: any, e: any) => ({ cwd: e.cwd }))
   on('session.attach', async (_: any, e: any) => ({ clientId: e.clientId }))
   on('session.surfaces', async () => ({ value: [] }))
   on('session.cwd', async () => ({ value: '/work' }))
   on('command.register', async (_: any, e: any) => ({ value: { command: e.name } }))
-  on('clock.every', async () => ({ value: { cancel: () => {} } }))
+  // A test that moves time hands over where its clock starts; the rest never tick.
+  if (clock === undefined) on('clock.every', async () => ({ value: { cancel: () => {} } }))
+  else seen.clock = mock.clock(on, { now: clock })
   on('env.get', async (_: any, e: any) => ({ value: env[e.name] }))
   // The file as last saved, so a pane that reads it again after Save sees what was written.
   on('fs.read', async () => ({ value: JSON.stringify(seen.saved.at(-1) ?? config) }))
@@ -121,7 +124,17 @@ function world(on: any, latest: unknown, config: unknown = {}, env: Record<strin
   })
   on('ui.open', async (_: any, e: any) => {
     seen.opened.push(e.id)
+    if (!seen.up.includes(e.id)) seen.up.push(e.id)
     return { value: { isPlaced: true } }
+  })
+  on('ui.panes', async () => ({ value: seen.up.map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) }))
+  on('ui.close', async (_: any, e: any) => {
+    seen.up = seen.up.filter(id => id !== e.id)
+    return { value: undefined }
+  })
+  on('ui.toast', async (_: any, e: any) => {
+    seen.toasts.push(e.text)
+    return { value: undefined }
   })
   return seen
 }
@@ -132,15 +145,54 @@ async function mounted($: any, on: any, latest: unknown = RESULT, pane: any = PA
   return { seen, ui: await $.ui.mount(pane) }
 }
 
-test('the desktop app attaching opens a Watch pane, a Pull requests pane and a Config pane, Watch in front', async ($, on) => {
+const WATCH_ID = 'on-my-watch', PRS_ID = 'on-my-watch-prs', CONFIG_ID = 'on-my-watch-config'
+
+test('a session starting or a surface attaching opens no pane while none was left open', async ($, on) => {
   const { seen } = await mounted($, on)
-  // Watch is opened again last, with focus: the last pane opened is the one shown.
-  expect(seen.opened).toEqual(['on-my-watch', 'on-my-watch-prs', 'on-my-watch-config', 'on-my-watch'])
+  expect(seen.opened).toEqual([])
 })
 
-test('a pane turned off in the config does not open', async ($, on) => {
-  const { seen } = await mounted($, on, RESULT, PANE, { panes: { pull_requests: false } })
-  expect(seen.opened).toEqual(['on-my-watch', 'on-my-watch-config', 'on-my-watch'])
+for (const [command, id] of [['on-my-watch:watch', WATCH_ID], ['watch', WATCH_ID], ['on-my-watch:prs', PRS_ID], ['on-my-watch:config', CONFIG_ID]] as const) {
+  test(`/${command} opens its own pane, in front, and no other`, async ($, on) => {
+    const seen = world(on, RESULT)
+    await $.command.run({ command } as any)
+    expect(seen.opened).toEqual([id])
+  })
+}
+
+test('a pane turned off in the config does not open, and says so', async ($, on) => {
+  const seen = world(on, RESULT, { panes: { pull_requests: false } })
+  await $.command.run({ command: 'on-my-watch:prs' } as any)
+  expect(seen.opened).toEqual([])
+  expect(seen.toasts.join('\n')).toMatch(/turned off in the config/)
+  await $.command.run({ command: 'on-my-watch:config' } as any)
+  expect(seen.opened).toEqual([CONFIG_ID])
+})
+
+test('a new session opens the panes left open last time, and only those', async ($, on) => {
+  const seen = world(on, RESULT, {}, undefined, { openPanes: [PRS_ID, CONFIG_ID] })
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  expect(seen.opened.sort()).toEqual([CONFIG_ID, PRS_ID])
+  // Already up, a pane is not opened twice when another app attaches.
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:second' })
+  expect(seen.opened.sort()).toEqual([CONFIG_ID, PRS_ID])
+})
+
+test('the commands remember the panes they opened, so the next session opens them again', async ($, on) => {
+  const seen = world(on, RESULT)
+  await $.command.run({ command: 'on-my-watch:watch' } as any)
+  await $.command.run({ command: 'on-my-watch:prs' } as any)
+  // The next session, with nothing up yet.
+  seen.up = []
+  seen.opened = []
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:next' })
+  expect(seen.opened.sort()).toEqual([WATCH_ID, PRS_ID])
+})
+
+test('a remembered pane the config turned off stays closed', async ($, on) => {
+  const seen = world(on, RESULT, { panes: { pull_requests: false } }, undefined, { openPanes: [WATCH_ID, PRS_ID] })
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  expect(seen.opened).toEqual([WATCH_ID])
 })
 
 test('one card per name and environment, the most urgent first, a row per query over its line', async ($, on) => {
@@ -1157,4 +1209,28 @@ test('reviewer pictures are read once per pull request fetch, not on every reloa
   await $.ui.mount(PANE)
   await $.command.run({ name: 'watch' } as any).catch(() => {})
   expect(seen.runs.filter(argv => argv.includes('avatars')).length).toBe(1)
+})
+
+test('the config sets the range each pane starts on, and a pick holds until the config changes it', async ($, on) => {
+  const config = { window: '1h', ranges: { watch: '15m', pull_requests: 'today' } }
+  const { ui } = await mounted($, on, RESULT, PRS, config)
+  expect((await ui.findAll({ key: 'span' }))[0].props.value).toBe('today')
+  const watch = await $.ui.mount(PANE)
+  expect((await watch.findAll({ key: 'window' }))[0].props.value).toBe('15m')
+  await ui.select({ key: 'span', value: 'month' })
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:again' })
+  expect((await ui.findAll({ key: 'span' }))[0].props.value).toBe('month')
+})
+
+test('the panes read the newest runs each minute only within panesSchedule, and the config always', async ($, on) => {
+  // Friday 30 October 2026, 17:58 here: two minutes inside the schedule's hours, then outside them.
+  const seen = world(on, RESULT, { panesSchedule: '* 9-17 * * 1-5' }, undefined, undefined, new Date(2026, 9, 30, 17, 58).getTime())
+  await $.session.start({ cwd: '/work' } as any)
+  const latest = () => seen.runs.filter(r => r.includes('latest')).length
+  const before = latest()
+  await seen.clock.advance(60_000)
+  expect(latest()).toBe(before + 1)
+  await seen.clock.advance(60_000)
+  await seen.clock.advance(60_000)
+  expect(latest()).toBe(before + 1)
 })

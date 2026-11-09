@@ -38,7 +38,7 @@ Checks, panes, notifications and the config form never call Claude. Only two thi
 
 ![Claude asks what it needs and the engine saves the config](assets/diagrams/configure.svg)
 
-The [`configure`](skills/configure/SKILL.md) skill guides this. Run `/on-my-watch:configure`, or ask in plain words, for example:
+The [`doctor`](skills/doctor/SKILL.md) skill guides this. Run `/on-my-watch:doctor`, or ask in plain words, for example:
 
 ```
 Add a query to my on-my-watch config: error logs for checkout-api in production, priority 1, alert above 20.
