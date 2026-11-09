@@ -595,15 +595,10 @@ async function readPanes($: any) {
   return { watch: panes.watch !== false, pull_requests: panes.pull_requests !== false }
 }
 
-// The newest run and the config, so the panes draw them however they come to open.
-async function ready($: any) {
-  await load($)
-  return readPanes($)
-}
-
 async function show($: any) {
   try {
-    const on = await ready($)
+    await load($)
+    const on = await readPanes($)
     for (const part of ['watch', 'pull_requests'] as const) if (on[part]) await $.ui.open(PANES[part])
     await $.ui.open(CONFIG_PANE)
     // The last pane opened is shown, and opening an open one only retitles it: focus brings Watch to the front.
@@ -987,16 +982,14 @@ export const register: Register = on => {
     await update($, running, () => null)
     // Runs land in the database from launchd; read the newest while the session runs.
     $.clock.every(60_000, () => load($))
-    // No pane is open to say what failed; /watch reads again and toasts it.
-    await ready($).catch(() => {})
+    if (e.surface || (await $.session.surfaces()).length > 0) await show($)
 
     return next(e)
   })
 
-  // A desktop app attaching reads the newest run; the panes wait for /watch.
   on('session.attach', async ($, e, next) => {
     const attached = await next(e)
-    await ready($).catch(() => {})
+    await show($)
 
     return attached
   })
