@@ -86,6 +86,24 @@
         }
       }
     },
+    "ranges": {
+      "description": "The range each pane starts on: Watch's window, \"\" for the config's window (the default), and Pull requests' span, \"3d\" when left out. A pick in a pane holds until the session ends or this changes.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "watch": {
+          "enum": ["", "1m", "5m", "15m", "30m", "1h", "4h", "12h", "1d", "7d"]
+        },
+        "pull_requests": {
+          "enum": ["today", "3d", "week", "month"]
+        }
+      }
+    },
+    "panesSchedule": {
+      "description": "When the open panes read the newest runs again: five cron fields, such as \"* 9-17 * * 1-5\". Every minute when left out; /watch always reads them, and the config is read every minute.",
+      "type": "string",
+      "pattern": "^\\S+ \\S+ \\S+ \\S+ \\S+$"
+    },
     "investigate": {
       "description": "What Investigate does: session \"new\" (the default) opens a new Claude session in the same folder, \"current\" asks this one; skill, such as \"triage\", is run with the problem; prompt and problem are its templates.",
       "type": "object",

@@ -900,7 +900,8 @@ def replace_config(home, config):
     with open(os.path.join(home, 'config.json')) as file:
         before = schedules(json.load(file))
     wrong = []
-    lines = [('config.schedule', config.get('schedule')), ('config.pullRequestsSchedule', config.get('pullRequestsSchedule'))] + [
+    lines = [('config.schedule', config.get('schedule')), ('config.pullRequestsSchedule', config.get('pullRequestsSchedule')),
+             ('config.panesSchedule', config.get('panesSchedule'))] + [
         (f'config.repos[{i}].queries[{j}].schedule', q.get('schedule'))
         for i, repo in enumerate(config.get('repos') or []) for j, q in enumerate(repo.get('queries') or []) if isinstance(q, dict)]
     for where, cron in lines:
